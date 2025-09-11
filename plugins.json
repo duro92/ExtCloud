@@ -1,0 +1,277 @@
+[
+    {
+        "iconUrl": "https://www.google.com/s2/favicons?domain=154.26.137.28&sz=%size%",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/duro92/ExtCloud",
+        "fileSize": 17754,
+        "status": 1,
+        "language": "id",
+        "authors": [
+            "Hexated",
+            "TeKuma25"
+        ],
+        "tvTypes": [
+            "AnimeMovie",
+            "Anime",
+            "OVA"
+        ],
+        "version": 15,
+        "internalName": "AnimeSail",
+        "url": "https://raw.githubusercontent.com/duro92/ExtCloud/builds/AnimeSail.cs3",
+        "name": "AnimeSail"
+    },
+    {
+        "iconUrl": "https://raw.githubusercontent.com/Kohi-den/extensions-source/927f9c68fd64ce52f6212ae633d0f0585eca3545/src/en/donghuastream/res/mipmap-xxxhdpi/ic_launcher.png",
+        "jarFileSize": 164205,
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/duro92/ExtCloud",
+        "fileSize": 30819,
+        "status": 1,
+        "language": "zh",
+        "authors": [
+            "Phisher98"
+        ],
+        "tvTypes": [
+            "Anime"
+        ],
+        "version": 13,
+        "internalName": "Donghuastream",
+        "jarUrl": "https://raw.githubusercontent.com/duro92/ExtCloud/builds/Donghuastream.jar",
+        "description": "Contains SeaTV (Chinese)",
+        "url": "https://raw.githubusercontent.com/duro92/ExtCloud/builds/Donghuastream.cs3",
+        "name": "Donghuastream"
+    },
+    {
+        "iconUrl": "https://www.google.com/s2/favicons?domain=scandal.dutamovie21.cc&sz=256",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/duro92/ExtCloud",
+        "fileSize": 18618,
+        "status": 1,
+        "language": "id",
+        "authors": [
+            "Hexated",
+            "TeKuma25"
+        ],
+        "tvTypes": [
+            "AsianDrama",
+            "TvSeries",
+            "Movie"
+        ],
+        "version": 3,
+        "internalName": "Dutamovie",
+        "description": "DutaMovie",
+        "url": "https://raw.githubusercontent.com/duro92/ExtCloud/builds/Dutamovie.cs3",
+        "name": "Dutamovie"
+    },
+    {
+        "iconUrl": "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/Icons/Funmovieslix.png",
+        "jarFileSize": 69324,
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/duro92/ExtCloud",
+        "fileSize": 18444,
+        "status": 1,
+        "language": "id",
+        "authors": [
+            "Phisher98"
+        ],
+        "tvTypes": [
+            "Movie",
+            "TvSeries"
+        ],
+        "version": 3,
+        "internalName": "Funmovieslix",
+        "jarUrl": "https://raw.githubusercontent.com/duro92/ExtCloud/builds/Funmovieslix.jar",
+        "description": "Indonesia Source",
+        "url": "https://raw.githubusercontent.com/duro92/ExtCloud/builds/Funmovieslix.cs3",
+        "name": "Funmovieslix"
+    },
+    {
+        "iconUrl": "https://t0.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://idlixian.com&size=16",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/duro92/ExtCloud",
+        "fileSize": 22881,
+        "status": 1,
+        "language": "id",
+        "authors": [
+            "Hexated"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Anime",
+            "AsianDrama"
+        ],
+        "version": 20,
+        "internalName": "IdlixProvider",
+        "url": "https://raw.githubusercontent.com/duro92/ExtCloud/builds/IdlixProvider.cs3",
+        "name": "IdlixProvider"
+    },
+    {
+        "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://klikxxi.fit&size=%size%",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/duro92/ExtCloud",
+        "fileSize": 15619,
+        "status": 1,
+        "language": "id",
+        "authors": [
+            "Duro92"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie"
+        ],
+        "version": 3,
+        "internalName": "Klikxxi",
+        "description": "Klikxxi",
+        "url": "https://raw.githubusercontent.com/duro92/ExtCloud/builds/Klikxxi.cs3",
+        "name": "Klikxxi"
+    },
+    {
+        "iconUrl": "https://moviebox.ph/favicon.ico",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/duro92/ExtCloud",
+        "fileSize": 27239,
+        "status": 1,
+        "language": "id",
+        "authors": [
+            "Hexated"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Anime",
+            "AsianDrama"
+        ],
+        "version": 3,
+        "internalName": "Moviebox",
+        "url": "https://raw.githubusercontent.com/duro92/ExtCloud/builds/Moviebox.cs3",
+        "name": "Moviebox"
+    },
+    {
+        "iconUrl": "https://github.com/SaurabhKaperwan/CSX/raw/refs/heads/master/NetflixMirrorProvider/icon.png",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/duro92/ExtCloud",
+        "fileSize": 44243,
+        "status": 1,
+        "authors": [
+            "megix"
+        ],
+        "tvTypes": [
+            "Movie",
+            "TvSeries",
+            "AsianDrama",
+            "Anime"
+        ],
+        "version": 31,
+        "internalName": "NetflixMirrorProvider",
+        "description": "Netflix, PrimeVideo, JioHotstar(Hotstar, Disney, Paramount, HBO, Peacock) Content in Multiple Languages",
+        "url": "https://raw.githubusercontent.com/duro92/ExtCloud/builds/NetflixMirrorProvider.cs3",
+        "name": "NetflixMirrorProvider"
+    },
+    {
+        "iconUrl": "https://www.google.com/s2/favicons?domain=noxx.to&sz=%size%",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/duro92/ExtCloud",
+        "fileSize": 13428,
+        "status": 1,
+        "language": "en",
+        "authors": [
+            "LikDev-256,Phisher98"
+        ],
+        "tvTypes": [
+            "TvSeries"
+        ],
+        "version": 2,
+        "internalName": "NOXXProvider",
+        "description": "HD TV Shows (Not all links are working because of a unsolvable issue)",
+        "url": "https://raw.githubusercontent.com/duro92/ExtCloud/builds/NOXXProvider.cs3",
+        "name": "NOXXProvider"
+    },
+    {
+        "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://ww03.pencurimovie.bond&size=%size%",
+        "jarFileSize": 48911,
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/duro92/ExtCloud",
+        "fileSize": 12656,
+        "status": 1,
+        "language": "id",
+        "authors": [
+            "Phisher98"
+        ],
+        "tvTypes": [
+            "Movie",
+            "TvSeries"
+        ],
+        "version": 4,
+        "internalName": "Pencurimovie",
+        "jarUrl": "https://raw.githubusercontent.com/duro92/ExtCloud/builds/Pencurimovie.jar",
+        "description": "Pencurimovie ",
+        "url": "https://raw.githubusercontent.com/duro92/ExtCloud/builds/Pencurimovie.cs3",
+        "name": "Pencurimovie"
+    },
+    {
+        "iconUrl": "https://www.google.com/s2/favicons?domain=gomov.bio&sz=%size%",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/duro92/ExtCloud",
+        "fileSize": 15614,
+        "status": 1,
+        "language": "id",
+        "authors": [
+            "Hexated",
+            "TeKuma25"
+        ],
+        "tvTypes": [
+            "AsianDrama",
+            "TvSeries",
+            "Movie"
+        ],
+        "version": 2,
+        "internalName": "Pusatfilm",
+        "description": "Pusatfilm is a plugin that provides streaming links for movies and TV series.",
+        "url": "https://raw.githubusercontent.com/duro92/ExtCloud/builds/Pusatfilm.cs3",
+        "name": "Pusatfilm"
+    },
+    {
+        "iconUrl": "https://cdn.discordapp.com/attachments/1109266606292488297/1193122096159674448/2-modified.png?ex=65ec2a0a&is=65d9b50a&hm=f1e0b0165e71101e5440b47592d9e15727a6c00cdeb3512108067bfbdbef1af7&",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/duro92/ExtCloud",
+        "fileSize": 116907,
+        "status": 1,
+        "language": "en",
+        "authors": [
+            "Hexated",
+            "Sora"
+        ],
+        "tvTypes": [
+            "AsianDrama",
+            "TvSeries",
+            "Anime",
+            "Movie"
+        ],
+        "version": 231,
+        "internalName": "SoraStream",
+        "description": "#1 best extention based on MultiAPI",
+        "url": "https://raw.githubusercontent.com/duro92/ExtCloud/builds/SoraStream.cs3",
+        "name": "SoraStream"
+    },
+    {
+        "iconUrl": "https://zoronime.com/wp-content/themes/zoronime/favicon.png?v=0.06",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/duro92/ExtCloud",
+        "fileSize": 16699,
+        "status": 1,
+        "language": "id",
+        "authors": [
+            "Hexated"
+        ],
+        "tvTypes": [
+            "AnimeMovie",
+            "OVA",
+            "Anime"
+        ],
+        "version": 1,
+        "internalName": "Zoronime",
+        "url": "https://raw.githubusercontent.com/duro92/ExtCloud/builds/Zoronime.cs3",
+        "name": "Zoronime"
+    }
+]
