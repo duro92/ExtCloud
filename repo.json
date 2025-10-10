@@ -1,9 +1,9 @@
 {
-    "name": "ExtCloud",
+    "name": "trimsz",
     "description": "Cloudstream extensions collection",
     "iconUrl": "https://avatars.githubusercontent.com/u/114850487?v=4",
     "manifestVersion": 1,
     "pluginLists": [
-      "https://raw.githubusercontent.com/duro92/ExtCloud/builds/plugins.json"
+      "https://raw.githubusercontent.com/trimsz/ExtCloud/builds/plugins.json"
     ]
 }
