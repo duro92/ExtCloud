@@ -9,6 +9,6 @@ class OppadramaPlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(Oppadrama())
         registerExtractorAPI(Smoothpre())
-registerExtractorAPI(Turbovidhls())
+		registerExtractorAPI(Emturbovid())
     }
 }
