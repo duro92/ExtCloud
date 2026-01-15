@@ -31,6 +31,7 @@ Berikut adalah daftar ekstensi yang tersedia di repositori ExtCloud:
 | NOMAT         | OK                                |
 | Oppadrama     | OK                                |
 | Otakudesu     | OK                                |
+| Oploverz      | OK                                |
 | Pencurimovie  | OK                                |
 | Pusatfilm     | OK                                |
 | Samehadeku    | OK                                |
@@ -55,6 +56,7 @@ Berikut adalah daftar ekstensi yang tersedia di repositori ExtCloud:
 4.  Phisher98 : https://github.com/phisher98/cloudstream-extensions-phisher
 5.  Zeeorepo : https://github.com/funeelo/zeeorepo
 6.  Sofie99 : https://github.com/Sofie99/cloudstream-extensions-sofie
+
 
 
 
