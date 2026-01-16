@@ -19,7 +19,7 @@ class Fufafilm : MainAPI() {
     companion object {
         var context: android.content.Context? = null
     }
-    override var mainUrl = "https://fufafilm.com"
+    override var mainUrl = "https://fufafilm.cyou"
     private var directUrl: String? = null
     override var name = "Fufafilm🍁"
     override val hasMainPage = true
