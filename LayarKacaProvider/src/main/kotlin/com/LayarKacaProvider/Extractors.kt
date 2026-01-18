@@ -33,35 +33,52 @@ class Co4nxtrl : Filesim() {
 
 open class Hownetwork : ExtractorApi() {
     override val name = "Hownetwork"
-    override var mainUrl = "https://stream.hownetwork.xyz"
+    override val mainUrl = "https://stream.hownetwork.xyz"
     override val requiresReferer = true
 
     override suspend fun getUrl(
-            url: String,
-            referer: String?,
-            subtitleCallback: (SubtitleFile) -> Unit,
-            callback: (ExtractorLink) -> Unit
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
     ) {
         val id = url.substringAfter("id=")
         val response = app.post(
-                "$mainUrl/api2.php?id=$id",
-                data = mapOf(
-                        "r" to "https://playeriframe.sbs/",
-                        "d" to mainUrl,
-                ),
-                referer = url,
-                headers = mapOf(
-                        "X-Requested-With" to "XMLHttpRequest"
-                )
+            "$mainUrl/api2.php?id=$id",
+            data = mapOf(
+                "r" to "",
+                "d" to mainUrl,
+            ),
+            referer = url,
+            headers = mapOf(
+                "X-Requested-With" to "XMLHttpRequest"
+            )
         ).text
         val json = JSONObject(response)
         val file = json.optString("file")
-        Log.d("Phisher", file)
-            M3u8Helper.generateM3u8(
-                this.name,
-                file,
-                file
-            ).forEach(callback)
+        callback.invoke(newExtractorLink(
+            this.name,
+            this.name,
+            file,
+            type = INFER_TYPE,
+            {
+                this.referer = file
+                this.headers = mapOf(
+                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:144.0) Gecko/20100101 Firefox/144.0",
+                    "Accept" to "*/*",
+                    "Accept-Language" to "en-US,en;q=0.5",
+                    "Sec-GPC" to "1",
+                    "Connection" to "keep-alive",
+                    "Sec-Fetch-Dest" to "empty",
+                    "Sec-Fetch-Mode" to "cors",
+                    "Sec-Fetch-Site" to "same-origin",
+                    "Priority" to "u=0",
+                    "Pragma" to "no-cache",
+                    "Cache-Control" to "no-cache",
+                    "TE" to "trailers"
+                )
+            }
+        ))
     }
 }
 
