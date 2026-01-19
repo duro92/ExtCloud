@@ -191,20 +191,26 @@ class LayarKacaProvider : MainAPI() {
         }
     }
 
-        override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
+         override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
+        Log.d("kraptor_$name", "data = ${data}")
         val document = app.get(data).document
-        document.select("ul#player-list > li").map {
-                fixUrl(it.select("a").attr("href"))
-            }.amap {
-            val test=it.getIframe()
-            val referer=getBaseUrl(it)
-            Log.d("Phisher",test)
-            loadExtractor(it.getIframe(), referer, subtitleCallback, callback)
+
+        val videolar = document.select("ul#player-list a")
+
+        videolar.forEach { video ->
+
+            val player = video.attr("href")
+
+            val playerAl = app.get(player, referer = "${mainUrl}/").document
+
+            val iframe = playerAl.selectFirst("iframe")?.attr("src").toString()
+
+            if (iframe.contains("https://short.icu")) {
+                val iframe =  app.get(iframe, allowRedirects = true).url
+                loadExtractor(iframe, "$mainUrl/", subtitleCallback, callback)
+            } else
+            loadExtractor(iframe, "$mainUrl/", subtitleCallback, callback)
+
         }
         return true
     }
