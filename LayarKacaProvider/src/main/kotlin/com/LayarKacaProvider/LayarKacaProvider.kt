@@ -192,7 +192,7 @@ class LayarKacaProvider : MainAPI() {
     }
 
          override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
-        Log.d("kraptor_$name", "data = ${data}")
+
         val document = app.get(data).document
 
         val videolar = document.select("ul#player-list a")
