@@ -14,7 +14,7 @@ class Filmapik : MainAPI() {
     companion object {
         var context: android.content.Context? = null
     }
-    override var mainUrl = "https://filmapik.singles"
+    override var mainUrl = "https://filmapik.fitness"
     override var name = "FilmApik🎃"
     override val hasMainPage = true
     override var lang = "id"
