@@ -84,7 +84,7 @@ class VideyV2 : ExtractorApi() {
             )
             {
                 this.referer = url
-                this.quality = Qualities.P1080.Value
+                this.quality = Qualities.P1080.value
             }
         )
     }
