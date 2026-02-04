@@ -11,7 +11,6 @@ Berikut adalah daftar ekstensi yang tersedia di repositori ExtCloud:
 | Anichin       | OK                                |
 | Donghub       | OK                                |
 | Dutamovie     | OK                                |
-| Funmovieslix  | OK                                |
 | Fufafilm      | OK                                |
 | FilmApik      | OK                                |
 | Idlix         | OK                                |
@@ -52,6 +51,7 @@ Berikut adalah daftar ekstensi yang tersedia di repositori ExtCloud:
 4.  Phisher98 : https://github.com/phisher98/cloudstream-extensions-phisher
 5.  Zeeorepo : https://github.com/funeelo/zeeorepo
 6.  Sofie99 : https://github.com/Sofie99/cloudstream-extensions-sofie
+
 
 
 
