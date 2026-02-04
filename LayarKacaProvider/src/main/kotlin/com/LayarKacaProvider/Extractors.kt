@@ -4,7 +4,6 @@ import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.extractors.Filesim
-import com.lagradost.cloudstream3.extractors.ByseSX
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.extractors.EmturbovidExtractor
@@ -103,9 +102,4 @@ class Emturbovid : EmturbovidExtractor() {
     override var mainUrl = "https://turbovidhls.com"
 }
 
-class F16px : ByseSX() {
-    override var mainUrl = "https://f16px.com"
-    override var name = "F16px"
-    override val requiresReferer = true
-}
 
