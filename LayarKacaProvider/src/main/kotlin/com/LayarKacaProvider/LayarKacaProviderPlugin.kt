@@ -19,6 +19,5 @@ class LayarKacaProviderPlugin: Plugin() {
         registerExtractorAPI(Co4nxtrl())
         registerExtractorAPI(Cloudhownetwork())
         registerExtractorAPI(F16px())
-        registerExtractorAPI(ByseSX())
     }
 }
