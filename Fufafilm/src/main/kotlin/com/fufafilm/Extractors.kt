@@ -44,6 +44,11 @@ class Bingezove : Dingtezuni() {
     override var mainUrl = "https://bingezove.com"
 }
 
+class Minochinos : Dingtezuni() {
+    override var name = "Minochinos"
+    override var mainUrl = "https://minochinos.com"
+}
+
 open class Dingtezuni : ExtractorApi() {
     override val name = "Earnvids"
     override val mainUrl = "https://dingtezuni.com"
@@ -117,6 +122,18 @@ class P2pplay : VidStack() {
     override var requiresReferer = true
 }
 
+class Fufaupns : VidStack() {
+    override var name = "Fufaupns"
+    override var mainUrl = "https://fufafilm.upns.pro"
+    override var requiresReferer = true
+}
+
+class Fufastrp2p : VidStack() {
+    override var name = "Fufastrp2p"
+    override var mainUrl = "https://fufafilm.strp2p.com"
+    override var requiresReferer = true
+}
+
 class Xshotcok : Hxfile() {
     override val name = "Xshotcok"
     override val mainUrl = "https://xshotcok.com"
@@ -125,6 +142,7 @@ class Xshotcok : Hxfile() {
 class Dsvplay : DoodLaExtractor() {
     override var mainUrl = "https://dsvplay.com"
 }
+
 
 open class Dintezuvio : ExtractorApi() {
     override val name = "Earnvids"

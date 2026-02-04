@@ -22,6 +22,9 @@ class FufafilmPlugin : Plugin() {
         registerExtractorAPI(Dsvplay())
         registerExtractorAPI(Dintezuvio())
         registerExtractorAPI(Vidhidepre())
+        registerExtractorAPI(Fufaupns())
+        registerExtractorAPI(Fufastrp2p())
+        registerExtractorAPI(Minochinos())
     }
 }
 
