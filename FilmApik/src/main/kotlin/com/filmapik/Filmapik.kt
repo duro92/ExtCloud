@@ -50,7 +50,6 @@ class Filmapik : MainAPI() {
     }
 }
 
-
     override suspend fun search(query: String): List<SearchResponse> {
         val document = app.get("$mainUrl?s=$query&post_type[]=post&post_type[]=tv").document
         return document.select("article.item").mapNotNull { it.toSearchResult() }
