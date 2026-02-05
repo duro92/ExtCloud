@@ -7,7 +7,6 @@ import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
 import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class PlayCinematic : ExtractorApi() {
     override val name = "PlayCinematic"
@@ -53,17 +52,18 @@ class PlayCinematic : ExtractorApi() {
                 headers = headers
             ).forEach(callback)
         } else {
+            @Suppress("DEPRECATION")
             callback(
-                newExtractorLink(
-                    source = name,
-                    name = name,
-                    url = location,
-                    referer = mainUrl,
-                    quality = quality,
-                    isM3u8 = false
-                ) {
-                    this.headers = headers
-                }
+                ExtractorLink(
+                    name,
+                    name,
+                    location,
+                    mainUrl,
+                    quality,
+                    false,
+                    headers,
+                    null
+                )
             )
         }
     }
