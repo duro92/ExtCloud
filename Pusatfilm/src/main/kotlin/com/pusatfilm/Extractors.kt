@@ -53,6 +53,20 @@ open class Kotakajaib : ExtractorApi() {
             // Jangan proses shortlink ouo
             if (fixed.contains("ouo.io") || fixed.contains("ouo.press")) return@forEach
 
+            // Pixeldrain direct (u/ID atau file/ID)
+            if (fixed.contains("pixeldrain.com/")) {
+                val fileId = when {
+                    fixed.contains("/u/") -> fixed.substringAfter("/u/").substringBefore("?").substringBefore("/")
+                    fixed.contains("/file/") -> fixed.substringAfter("/file/").substringBefore("?").substringBefore("/")
+                    else -> ""
+                }
+                if (fileId.isNotBlank()) {
+                    val apiUrl = "https://pixeldrain.com/api/file/$fileId"
+                    loadExtractor(apiUrl, "https://pixeldrain.com/", subtitleCallback, callback)
+                    return@forEach
+                }
+            }
+
             loadExtractor(fixed, "$mainUrl/", subtitleCallback, callback)
 
             // Jika link mengarah ke endpoint API Kotakajaib, coba ambil url langsung
