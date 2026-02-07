@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.utils.httpsify
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import org.jsoup.nodes.Element
 import java.net.URI
 
@@ -169,6 +170,50 @@ class Pusatfilm : MainAPI() {
         if (!iframe.isNullOrBlank()) {
             val refererBase = runCatching { getBaseUrl(iframe) }.getOrDefault(mainUrl) + "/"
             loadExtractor(iframe, refererBase, subtitleCallback, callback)
+        }
+
+        // Download button links (contoh: kotakajaib.me/file/ID)
+        val downloadLinks = document.select(
+            "li.pull-right a[href], a:contains(Download), a:contains(download), span.textdownload"
+        ).mapNotNull { el ->
+            if (el.tagName() == "span") {
+                el.parent()?.attr("href")
+            } else {
+                el.attr("href")
+            }
+        }.mapNotNull { it.takeIf { link -> link.isNotBlank() } }
+
+        downloadLinks.forEach { link ->
+            val fixed = fixUrl(link)
+            // Coba langsung lewat extractor
+            loadExtractor(fixed, mainUrl, subtitleCallback, callback)
+
+            // Khusus kotakajaib: ambil API download untuk mirror
+            if (fixed.contains("kotakajaib.me/file/")) {
+                val base = getBaseUrl(fixed)
+                val fileId = fixed.substringAfter("/file/").substringBefore("?").substringBefore("/")
+                if (fileId.isNotBlank()) {
+                    val apiUrl = "$base/api/file/$fileId/download"
+                    val apiResp = app.get(apiUrl, referer = base).text
+
+                    // Cari URL langsung di JSON (jika ada)
+                    Regex("https?://[^\"'\\s]+").findAll(apiResp).forEach { m ->
+                        val url = m.value
+                        loadExtractor(url, base, subtitleCallback, callback)
+                    }
+
+                    // Fallback: parse JSON untuk key yang mengandung url
+                    val parsed = runCatching { tryParseJson<Map<String, Any>>(apiResp) }.getOrNull()
+                    parsed?.let { map ->
+                        map.values.forEach { v ->
+                            val s = v?.toString() ?: return@forEach
+                            if (s.startsWith("http")) {
+                                loadExtractor(s, base, subtitleCallback, callback)
+                            }
+                        }
+                    }
+                }
+            }
         }
         return true
     }
