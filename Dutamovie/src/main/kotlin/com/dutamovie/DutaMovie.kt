@@ -176,7 +176,7 @@ open class DutaMovie : MainAPI() {
             addActors(actors)
             this.recommendations = recommendations
             this.duration = duration ?: 0
-            addTrailer(trailer)
+            addTrailer(trailer, referer = mainUrl, addRaw = true)
         }
     }
 
@@ -236,7 +236,7 @@ open class DutaMovie : MainAPI() {
         addActors(actors)
         this.recommendations = recommendations
         this.duration = duration ?: 0
-        addTrailer(trailer)
+        addTrailer(trailer, referer = mainUrl, addRaw = true)
     }
 }
 
