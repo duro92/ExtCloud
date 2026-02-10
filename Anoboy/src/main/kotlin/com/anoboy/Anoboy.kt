@@ -47,7 +47,7 @@ class Anoboy : MainAPI() {
         "anime/?status=&type=&order=popular" to "Terpopuler",
     )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         context?.let { StarPopupHelper.showStarPopupIfNeeded(it) }
         val url = "$mainUrl/${request.data}".plus("&page=$page")
         val document = app.get(url).document
@@ -147,18 +147,6 @@ class Anoboy : MainAPI() {
     val recommendations = document.select("div.listupd article.bs")
         .mapNotNull { it.toRecommendResult() }
 
-    val characterActors = parseCharacterActors(document)
-
-    val extraActors = actors.map { ActorData(Actor(it)) }
-    val allActors = (characterActors + extraActors)
-        .distinctBy { "${it.actor.name}:${it.voiceActor?.name ?: ""}" }
-
-    val trackerType = if (episodes.size > 1) TvType.Anime else TvType.AnimeMovie
-    val tracker = APIHolder.getTracker(listOf(title), TrackerType.getTypes(trackerType), year, true)
-
-    val malId = findIdFromLinks(document, "myanimelist.net/anime/") ?: tracker?.malId
-    val aniListId = findIdFromLinks(document, "anilist.co/anime/") ?: tracker?.aniId
-
     
 val episodeElements = document.select("div.eplister ul li a")
 
@@ -176,8 +164,7 @@ val episodes = episodeElements
     return if (episodes.size > 1) {
     // TV Series
     newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-        this.posterUrl = tracker?.image ?: poster
-        this.backgroundPosterUrl = tracker?.cover ?: poster
+        this.posterUrl = poster
         this.year = year
         this.plot = description
         this.tags = tags
@@ -185,25 +172,20 @@ val episodes = episodeElements
         this.recommendations = recommendations
         this.duration = duration ?: 0
         if (rating != null) addScore(rating.toString(), 10)
-        if (allActors.isNotEmpty()) this.actors = allActors
-        if (!malId.isNullOrBlank()) addMalId(malId)
-        if (!aniListId.isNullOrBlank()) addAniListId(aniListId.toIntOrNull())
+        addActors(actors)
         addTrailer(trailer)
     }
 } else {
     // Movie
     newMovieLoadResponse(title, url, TvType.Movie, episodes.firstOrNull()?.data ?: url) {
-        this.posterUrl = tracker?.image ?: poster
-        this.backgroundPosterUrl = tracker?.cover ?: poster
+        this.posterUrl = poster
         this.year = year
         this.plot = description
         this.tags = tags
         this.recommendations = recommendations
         this.duration = duration ?: 0
         if (rating != null) addScore(rating.toString(), 10)
-        if (allActors.isNotEmpty()) this.actors = allActors
-        if (!malId.isNullOrBlank()) addMalId(malId)
-        if (!aniListId.isNullOrBlank()) addAniListId(aniListId.toIntOrNull())
+        addActors(actors)
         addTrailer(trailer)
     }
 }
@@ -283,66 +265,6 @@ val episodes = episodeElements
             this.hasAttr("srcset") -> this.attr("abs:srcset").substringBefore(" ")
             else -> this.attr("abs:src")
         }
-    }
-
-    private fun parseCharacterActors(document: Document): List<ActorData> {
-        val items = document.select("div.bixbox.charvoice div.cvitem")
-        if (items.isEmpty()) return emptyList()
-
-        return items.mapNotNull { item ->
-            val charBlock = item.selectFirst(".cvsuitem.cvchar, .cvchar")
-            val vaBlock = item.selectFirst(".cvsuitem.cvactor, .cvactor")
-
-            val charName = charBlock
-                ?.selectFirst(".charname a, .charname")
-                ?.text()
-                ?.trim()
-                ?.takeIf { it.isNotBlank() }
-                ?: return@mapNotNull null
-
-            val charImg = charBlock
-                .selectFirst("img")
-                ?.getImageAttr()
-                ?.let { fixUrlNull(it) }
-
-            val roleText = charBlock
-                .selectFirst(".charrole")
-                ?.text()
-                ?.trim()
-                ?.takeIf { it.isNotBlank() }
-
-            val role = when (roleText?.lowercase()) {
-                "main" -> ActorRole.Main
-                "supporting" -> ActorRole.Supporting
-                "background" -> ActorRole.Background
-                else -> null
-            }
-
-            val vaName = vaBlock
-                ?.selectFirst(".charname a, .charname")
-                ?.text()
-                ?.trim()
-                ?.takeIf { it.isNotBlank() }
-
-            val vaImg = vaBlock
-                ?.selectFirst("img")
-                ?.getImageAttr()
-                ?.let { fixUrlNull(it) }
-
-            ActorData(
-                actor = Actor(charName, charImg),
-                role = role,
-                roleString = if (role == null) roleText else null,
-                voiceActor = vaName?.let { Actor(it, vaImg) }
-            )
-        }
-    }
-
-    private fun findIdFromLinks(document: Document, pattern: String): String? {
-        val href = document.select("a[href*=\"$pattern\"]").firstOrNull()?.attr("href") ?: return null
-        val idPart = href.substringAfter(pattern, "")
-        val id = idPart.takeWhile { it.isDigit() }
-        return id.takeIf { it.isNotBlank() }
     }
 
     private fun Element?.getIframeAttr(): String? {
