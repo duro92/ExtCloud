@@ -4,6 +4,8 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors  
 import com.lagradost.cloudstream3.LoadResponse.Companion.addScore  
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer  
+import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
+import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
 import com.lagradost.cloudstream3.MainAPI  
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.base64Decode 
@@ -151,6 +153,12 @@ class Anoboy : MainAPI() {
     val allActors = (characterActors + extraActors)
         .distinctBy { "${it.actor.name}:${it.voiceActor?.name ?: ""}" }
 
+    val trackerType = if (episodes.size > 1) TvType.Anime else TvType.AnimeMovie
+    val tracker = APIHolder.getTracker(listOf(title), TrackerType.getTypes(trackerType), year, true)
+
+    val malId = findIdFromLinks(document, "myanimelist.net/anime/") ?: tracker?.malId
+    val aniListId = findIdFromLinks(document, "anilist.co/anime/") ?: tracker?.aniId
+
     
 val episodeElements = document.select("div.eplister ul li a")
 
@@ -168,7 +176,8 @@ val episodes = episodeElements
     return if (episodes.size > 1) {
     // TV Series
     newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-        this.posterUrl = poster
+        this.posterUrl = tracker?.image ?: poster
+        this.backgroundPosterUrl = tracker?.cover ?: poster
         this.year = year
         this.plot = description
         this.tags = tags
@@ -177,12 +186,15 @@ val episodes = episodeElements
         this.duration = duration ?: 0
         if (rating != null) addScore(rating.toString(), 10)
         if (allActors.isNotEmpty()) this.actors = allActors
+        if (!malId.isNullOrBlank()) addMalId(malId)
+        if (!aniListId.isNullOrBlank()) addAniListId(aniListId.toIntOrNull())
         addTrailer(trailer)
     }
 } else {
     // Movie
     newMovieLoadResponse(title, url, TvType.Movie, episodes.firstOrNull()?.data ?: url) {
-        this.posterUrl = poster
+        this.posterUrl = tracker?.image ?: poster
+        this.backgroundPosterUrl = tracker?.cover ?: poster
         this.year = year
         this.plot = description
         this.tags = tags
@@ -190,6 +202,8 @@ val episodes = episodeElements
         this.duration = duration ?: 0
         if (rating != null) addScore(rating.toString(), 10)
         if (allActors.isNotEmpty()) this.actors = allActors
+        if (!malId.isNullOrBlank()) addMalId(malId)
+        if (!aniListId.isNullOrBlank()) addAniListId(aniListId.toIntOrNull())
         addTrailer(trailer)
     }
 }
@@ -322,6 +336,13 @@ val episodes = episodeElements
                 voiceActor = vaName?.let { Actor(it, vaImg) }
             )
         }
+    }
+
+    private fun findIdFromLinks(document: Document, pattern: String): String? {
+        val href = document.select("a[href*=\"$pattern\"]").firstOrNull()?.attr("href") ?: return null
+        val idPart = href.substringAfter(pattern, "")
+        val id = idPart.takeWhile { it.isDigit() }
+        return id.takeIf { it.isNotBlank() }
     }
 
     private fun Element?.getIframeAttr(): String? {
