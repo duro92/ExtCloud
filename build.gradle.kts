@@ -12,7 +12,8 @@ buildscript {
 
     dependencies {
         classpath("com.android.tools.build:gradle:8.7.3") // Jangan diganti ke versi terbaru, karena ada masalah dengan versi terbaru
-        classpath("com.github.recloudstream:gradle:master-SNAPSHOT")
+        // Jitpack no longer publishes master-SNAPSHOT; use main-SNAPSHOT instead.
+        classpath("com.github.recloudstream:gradle:main-SNAPSHOT")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.3.0")
     }
 }
