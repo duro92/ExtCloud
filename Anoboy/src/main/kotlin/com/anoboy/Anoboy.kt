@@ -16,6 +16,7 @@ import com.lagradost.cloudstream3.newEpisode
 import com.lagradost.cloudstream3.utils.*  
 import org.jsoup.nodes.Element
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 
 
 class Anoboy : MainAPI() {
@@ -144,6 +145,12 @@ class Anoboy : MainAPI() {
     val recommendations = document.select("div.listupd article.bs")
         .mapNotNull { it.toRecommendResult() }
 
+    val characterActors = parseCharacterActors(document)
+
+    val extraActors = actors.map { ActorData(Actor(it)) }
+    val allActors = (characterActors + extraActors)
+        .distinctBy { "${it.actor.name}:${it.voiceActor?.name ?: ""}" }
+
     
 val episodeElements = document.select("div.eplister ul li a")
 
@@ -169,7 +176,7 @@ val episodes = episodeElements
         this.recommendations = recommendations
         this.duration = duration ?: 0
         if (rating != null) addScore(rating.toString(), 10)
-        addActors(actors)
+        if (allActors.isNotEmpty()) this.actors = allActors
         addTrailer(trailer)
     }
 } else {
@@ -182,7 +189,7 @@ val episodes = episodeElements
         this.recommendations = recommendations
         this.duration = duration ?: 0
         if (rating != null) addScore(rating.toString(), 10)
-        addActors(actors)
+        if (allActors.isNotEmpty()) this.actors = allActors
         addTrailer(trailer)
     }
 }
@@ -261,6 +268,59 @@ val episodes = episodeElements
             this.hasAttr("data-lazy-src") -> this.attr("abs:data-lazy-src")
             this.hasAttr("srcset") -> this.attr("abs:srcset").substringBefore(" ")
             else -> this.attr("abs:src")
+        }
+    }
+
+    private fun parseCharacterActors(document: Document): List<ActorData> {
+        val items = document.select("div.bixbox.charvoice div.cvitem")
+        if (items.isEmpty()) return emptyList()
+
+        return items.mapNotNull { item ->
+            val charBlock = item.selectFirst(".cvsuitem.cvchar, .cvchar")
+            val vaBlock = item.selectFirst(".cvsuitem.cvactor, .cvactor")
+
+            val charName = charBlock
+                ?.selectFirst(".charname a, .charname")
+                ?.text()
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?: return@mapNotNull null
+
+            val charImg = charBlock
+                .selectFirst("img")
+                ?.getImageAttr()
+                ?.let { fixUrlNull(it) }
+
+            val roleText = charBlock
+                .selectFirst(".charrole")
+                ?.text()
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+
+            val role = when (roleText?.lowercase()) {
+                "main" -> ActorRole.Main
+                "supporting" -> ActorRole.Supporting
+                "background" -> ActorRole.Background
+                else -> null
+            }
+
+            val vaName = vaBlock
+                ?.selectFirst(".charname a, .charname")
+                ?.text()
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+
+            val vaImg = vaBlock
+                ?.selectFirst("img")
+                ?.getImageAttr()
+                ?.let { fixUrlNull(it) }
+
+            ActorData(
+                actor = Actor(charName, charImg),
+                role = role,
+                roleString = if (role == null) roleText else null,
+                voiceActor = vaName?.let { Actor(it, vaImg) }
+            )
         }
     }
 
