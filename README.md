@@ -1,45 +1,6 @@
 # ExtCloud: Kumpulan Ekstensi CloudStream untuk Konten Indonesia 
 
-ExtCloud adalah kumpulan ekstensi CloudStream yang beberapa providernya diambil dari berbagai sumber dan dijadikan satu agar lebih fokus ke konten Indonesia saja.
-
-## Daftar Ekstensi
-
-Berikut adalah daftar ekstensi yang tersedia di repositori ExtCloud:
-
-| Nama Ekstensi | Status                            |
-| ------------- | --------------------------------- |
-| Anichin       | OK                                |
-| Donghub       | OK                                |
-| Dutamovie     | OK                                |
-| Fufafilm      | OK                                |
-| FilmApik      | OK                                |
-| Idlix         | OK                                |
-| KLIKXXI       | OK                                |
-| Kawanfilm     | OK                                |
-| Kissasian     | OK                                |
-| Kisskh        | OK                                |
-| LayarKaca     | OK                                |
-| Melongmovie   | OK                                |
-| MovieBox      | OK                                |
-| Ngefilm       | OK                                |
-| NOMAT         | OK                                |
-| Oppadrama     | OK                                |
-| Otakudesu     | OK                                |
-| Oploverz      | OK                                |
-| Pencurimovie  | OK                                |
-| Pusatfilm     | OK                                |
-| Samehadeku    | OK                                |
-| SoraStream    | OK                                |
-
-## Cara Menggunakan
-
-1.  Buka aplikasi CloudStream.
-2.  Buka menu "Ekstensi".
-3.  Klik tombol "Tambahkan Repositori".
-4.  Masukkan URL repositori ExtCloud: https://raw.githubusercontent.com/duro92/ExtCloud/main/repo.json
-5.  Klik "Tambahkan".
-6.  Ekstensi yang tersedia akan muncul di daftar.
-7.  Pilih ekstensi yang ingin Anda instal dan klik "Instal".
+ExtCloud adalah kumpulan ekstensi CloudStream yang beberapa providernya diambil dari berbagai sumber dan dijadikan satu agar lebih fokus ke konten Indonesia saja.
 
 ## Thanks To :
 
