@@ -49,7 +49,6 @@ class Funmovieslix : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-    context?.let { StarPopupHelper.showStarPopupIfNeeded(it) }
     val document = if (request.data == "latest-updates") {
         val url = if (page == 1)
             "$mainUrl/latest-updates/"
