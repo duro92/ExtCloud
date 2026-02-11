@@ -8,7 +8,6 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.MainPageRequest
-import com.lagradost.cloudstream3.Score
 import com.lagradost.cloudstream3.SearchQuality
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.SubtitleFile
@@ -26,18 +25,19 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Element
 
+
 class Funmovieslix : MainAPI() {
     override var mainUrl = "https://funmovieslix.com"
-    override var name = "Funmovieslix🐱‍👤"
+    override var name = "Funmovieslix🎥"
     override val hasMainPage = true
     override var lang = "id"
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Movie, TvType.Anime, TvType.Cartoon)
 
+
     override val mainPage = mainPageOf(
-        "latest-updates" to "Latest",
-        "best-rating" to "Best Rating",
-        "order-by-title" to "Movie A-Z",
+        "latest-updates" to "Update Terbaru",
+        "order-by-title" to "Film A-Z",
         "category/action" to "Action Category",
         "category/science-fiction" to "Sci-Fi Category",
         "category/drama" to "Drama Category",
@@ -49,51 +49,76 @@ class Funmovieslix : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val document = app.get("$mainUrl/${request.data}/page/$page").documentLarge
-        val home = document.select("#gmr-main-load div.movie-card").mapNotNull { it.toSearchResult() }
-        return newHomePageResponse(
-            list = HomePageList(
-                name = request.name,
-                list = home,
-                isHorizontalImages = false
-            ),
-            hasNext = true
-        )
+    context?.let { StarPopupHelper.showStarPopupIfNeeded(it) }
+    val document = if (request.data == "latest-updates") {
+        val url = if (page == 1)
+            "$mainUrl/latest-updates/"
+        else
+            "$mainUrl/latest-updates/page/$page/"
+        app.get(url).documentLarge
+    } else {
+        app.get("$mainUrl/${request.data}/page/$page").documentLarge
     }
 
-    private fun Element.toSearchResult(): SearchResponse {
-        val title = this.select("h3").text()
-        val href = fixUrl(this.select("a").attr("href"))
-        val posterUrl = this.select("a img").firstOrNull()?.let { img ->
-            val srcSet = img.attr("srcset")
-            val bestUrl = if (srcSet.isNotBlank()) {
-                srcSet.split(",")
-                    .map { it.trim() }
-                    .maxByOrNull { it.substringAfterLast(" ").removeSuffix("w").toIntOrNull() ?: 0 }
-                    ?.substringBefore(" ")
-            } else {
-                img.attr("src")
-            }
+    val home = if (request.data == "latest-updates") {
+    document.select("#latest-wrap div.latest-card")
+        .mapNotNull { it.toSearchResult() }
+} else {
+    document.select("#gmr-main-load div.movie-card")
+        .mapNotNull { it.toSearchResult() }
+}
 
-            fixUrlNull(bestUrl?.replace(Regex("-\\d+x\\d+"), ""))
+    return newHomePageResponse(
+        HomePageList(request.name, home, false),
+        hasNext = true
+    )
+}
+
+    private fun Element.toSearchResult(): SearchResponse? {
+
+    val anchor = selectFirst(".overlay a") ?: selectFirst("a")
+        ?: return null
+
+    val href = fixUrl(anchor.attr("href"))
+    if (href.isBlank()) return null
+
+    val title = anchor.selectFirst("h3")?.text()
+        ?: return null
+
+    val img = selectFirst("img")
+
+    val posterUrl = img?.let {
+        val srcSet = it.attr("srcset")
+        val bestUrl = if (srcSet.isNotBlank()) {
+            srcSet.split(",")
+                .map { s -> s.trim() }
+                .maxByOrNull {
+                    it.substringAfterLast(" ")
+                        .removeSuffix("w")
+                        .toIntOrNull() ?: 0
+                }
+                ?.substringBefore(" ")
+        } else {
+            it.attr("src")
         }
-        val searchQuality = getSearchQuality(this)
-        val score=this.select("div.rating-stars").text().substringAfter("(").substringBefore(")")
-        return newMovieSearchResponse(title, href, TvType.Movie) {
-            this.posterUrl = posterUrl
-            this.quality = searchQuality
-            this.score=Score.from10(score)
-        }
+        fixUrlNull(bestUrl)
     }
+
+    return newMovieSearchResponse(title, href, TvType.Movie) {
+        this.posterUrl = posterUrl
+        this.quality = getSearchQuality(this@toSearchResult)
+    }
+}
+
 
     override suspend fun search(query: String): List<SearchResponse> {
-            val document = app.get("${mainUrl}?s=$query").documentLarge
+            val document = app.get("${mainUrl}?s=$query").document
             val results =document.select("#gmr-main-load div.movie-card").mapNotNull { it.toSearchResult() }
         return results
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url).documentLarge
+        val document = app.get(url).document
         val title =document.select("meta[property=og:title]").attr("content").substringBefore("(").substringBefore("-").trim()
         val poster = document.select("meta[property=og:image]").attr("content")
         val description = document.select("div.desc-box p,div.entry-content p").text()
@@ -168,7 +193,7 @@ class Funmovieslix : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data).documentLarge
+        val document = app.get(data).document
 
         // 1. Get all <script> tags that contain "embeds"
         val scriptContent = document.select("script")
@@ -197,11 +222,10 @@ class Funmovieslix : MainAPI() {
             qualityText.contains("WEBRIP") -> SearchQuality.WebRip
             qualityText.contains("WEB-DL") -> SearchQuality.WebRip
             qualityText.contains("BLURAY") -> SearchQuality.BlueRay
-            qualityText.contains("4K") -> SearchQuality.FourK
+            qualityText.contains("4K") -> SearchQuality.UHD
             qualityText.contains("HD") -> SearchQuality.HD
             else -> SearchQuality.HD
         }
     }
 
 }
-
