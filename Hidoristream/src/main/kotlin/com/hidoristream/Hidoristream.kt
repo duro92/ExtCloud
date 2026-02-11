@@ -23,7 +23,7 @@ import org.jsoup.nodes.Document
 
 class Hidoristream : MainAPI() {
     override var mainUrl = "https://v2.hidoristream.online"
-    override var name = "Hidoristream"
+    override var name = "Hidoristream🐹"
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
