@@ -142,16 +142,18 @@ class Gojodesu : MainAPI() {
             )
         }
 
-        val episodeElements = document.select("div.eplister ul li a")
-        val episodes = episodeElements
-            .reversed()
-            .mapIndexed { index, aTag ->
-                val href = fixUrl(aTag.attr("href"))
-                newEpisode(href) {
-                    name = "Episode ${index + 1}"
-                    episode = index + 1
-                }
+        val episodeItems = document.select("div.eplister ul li")
+        val episodes = episodeItems.mapNotNull { li ->
+            val aTag = li.selectFirst("a") ?: return@mapNotNull null
+            val epNum = li.selectFirst(".epl-num")?.text()?.filter { it.isDigit() }?.toIntOrNull()
+                ?: li.selectFirst(".epl-title")?.text()?.let { Regex("(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+                ?: aTag.text()?.let { Regex("(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+            val epTitle = li.selectFirst(".epl-title")?.text()?.trim()
+            newEpisode(fixUrl(aTag.attr("href"))) {
+                name = epTitle ?: (epNum?.let { "Episode $it" } ?: "Episode")
+                episode = epNum
             }
+        }.sortedBy { it.episode ?: Int.MAX_VALUE }
 
         val altTitles = listOfNotNull(
             title,
@@ -271,4 +273,3 @@ class Gojodesu : MainAPI() {
             ?: this?.attr("src")
     }
 }
-
