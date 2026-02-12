@@ -119,6 +119,28 @@ class Anoboy : MainAPI() {
         val recommendations = document.select("div.listupd article.bs")
             .mapNotNull { it.toRecommendResult() }
 
+        val castList = document.select("div.bixbox.charvoice div.cvitem").mapNotNull { item ->
+            val charBox = item.selectFirst(".cvsubitem.cvchar") ?: item
+            val actorBox = item.selectFirst(".cvsubitem.cvactor") ?: item
+
+            val charName = charBox.selectFirst(".cvcontent .charname")?.text()?.trim()
+            val charRole = charBox.selectFirst(".cvcontent .charrole")?.text()?.trim()
+            val charImg = charBox.selectFirst(".cvcover img")?.getImageAttr()?.let { fixUrlNull(it) }
+
+            val actorName = actorBox.selectFirst(".cvcontent .charname")?.text()?.trim()
+            val actorImg = actorBox.selectFirst(".cvcover img")?.getImageAttr()?.let { fixUrlNull(it) }
+
+            if (charName.isNullOrBlank() && actorName.isNullOrBlank()) return@mapNotNull null
+
+            val actor = Actor(charName ?: actorName ?: "", charImg)
+            val voiceActor = actorName?.let { Actor(it, actorImg) }
+            ActorData(
+                actor = actor,
+                roleString = charRole,
+                voiceActor = voiceActor,
+            )
+        }
+
         val episodeElements = document.select("div.eplister ul li a")
         val episodes = episodeElements
             .reversed()
@@ -130,7 +152,25 @@ class Anoboy : MainAPI() {
                 }
             }
 
-        val tracker = APIHolder.getTracker(listOf(title), TrackerType.getTypes(type), year, true)
+        val altTitles = listOfNotNull(
+            title,
+            document.selectFirst("span:matchesOwn(Judul Inggris:)")?.ownText()?.trim(),
+            document.selectFirst("span:matchesOwn(Judul Jepang:)")?.ownText()?.trim(),
+            document.selectFirst("span:matchesOwn(Judul Asli:)")?.ownText()?.trim(),
+        ).distinct()
+
+        val malIdFromPage = document.selectFirst("a[href*=\"myanimelist.net/anime/\"]")
+            ?.attr("href")
+            ?.substringAfter("/anime/", "")
+            ?.substringBefore("/")
+            ?.toIntOrNull()
+        val aniIdFromPage = document.selectFirst("a[href*=\"anilist.co/anime/\"]")
+            ?.attr("href")
+            ?.substringAfter("/anime/", "")
+            ?.substringBefore("/")
+            ?.toIntOrNull()
+
+        val tracker = APIHolder.getTracker(altTitles, TrackerType.getTypes(type), year, true)
 
         return if (episodes.isNotEmpty()) {
             newAnimeLoadResponse(title, url, type) {
@@ -145,9 +185,10 @@ class Anoboy : MainAPI() {
                 addEpisodes(DubStatus.Subbed, episodes)
                 rating?.let { addScore(it.toString(), 10) }
                 addActors(actors)
+                if (castList.isNotEmpty()) this.actors = castList
                 addTrailer(trailer)
-                addMalId(tracker?.malId)
-                addAniListId(tracker?.aniId?.toIntOrNull())
+                addMalId(malIdFromPage ?: tracker?.malId)
+                addAniListId(aniIdFromPage ?: tracker?.aniId?.toIntOrNull())
             }
         } else {
             newMovieLoadResponse(title, url, type, url) {
@@ -160,9 +201,10 @@ class Anoboy : MainAPI() {
                 this.duration = duration ?: 0
                 rating?.let { addScore(it.toString(), 10) }
                 addActors(actors)
+                if (castList.isNotEmpty()) this.actors = castList
                 addTrailer(trailer)
-                addMalId(tracker?.malId)
-                addAniListId(tracker?.aniId?.toIntOrNull())
+                addMalId(malIdFromPage ?: tracker?.malId)
+                addAniListId(aniIdFromPage ?: tracker?.aniId?.toIntOrNull())
             }
         }
     }
@@ -228,3 +270,4 @@ class Anoboy : MainAPI() {
             ?: this?.attr("src")
     }
 }
+
