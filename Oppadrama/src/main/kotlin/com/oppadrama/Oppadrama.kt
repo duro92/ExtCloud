@@ -195,78 +195,51 @@ val episodes = episodeElements
 
 }
        
-    override suspend fun loadLinks(
-    data: String,
-    isCasting: Boolean,
-    subtitleCallback: (SubtitleFile) -> Unit,
-    callback: (ExtractorLink) -> Unit
-): Boolean {
+        override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val document = app.get(data).document
 
-    val document = app.get(data).document
-    fun refererFromUrl(url: String, fallback: String): String {
-        return runCatching {
-            val uri = URI(url)
-            if (uri.host.isNullOrBlank()) fallback else "${uri.scheme}://${uri.host}/"
-        }.getOrElse { fallback }
-    }
-
-
-    // ===== CASE 1: IFRAME PLAYER UTAMA (emturbovid) =====
-    document.selectFirst("div.player-embed iframe")
-        ?.getIframeAttr()
-        ?.let { iframe ->
-            val src = httpsify(iframe)
-            loadExtractor(src, refererFromUrl(src, data), subtitleCallback, callback)
-        }
-
-
-    // ===== CASE 2: MIRROR SERVER (TurboVID / HydraX / FileLions) =====
-    val mirrorOptions = document.select("select.mirror option[value]:not([disabled])")
-
-    for (opt in mirrorOptions) {
-        val base64 = opt.attr("value")
-        if (base64.isBlank()) continue
-
-        try {
-            // Fix untuk base64 yang diselipkan whitespace
-            val cleanedBase64 = base64.replace("\\s".toRegex(), "")
-            val decodedHtml = base64Decode(cleanedBase64)
-
-            val iframeTag = Jsoup.parse(decodedHtml).selectFirst("iframe")
-
-            val mirrorUrl = when {
-                iframeTag?.attr("src")?.isNotBlank() == true ->
-                    iframeTag.attr("src")
-                iframeTag?.attr("data-src")?.isNotBlank() == true ->
-                    iframeTag.attr("data-src")
-                else -> null
+        document.selectFirst("div.player-embed iframe")
+            ?.getIframeAttr()
+            ?.let { iframe ->
+                loadExtractor(httpsify(iframe), data, subtitleCallback, callback)
             }
 
-            if (!mirrorUrl.isNullOrBlank()) {
-                val src = httpsify(mirrorUrl)
-                loadExtractor(src, refererFromUrl(src, data), subtitleCallback, callback)
+        val mirrorOptions = document.select("select.mirror option[value]:not([disabled])")
+        for (opt in mirrorOptions) {
+            val base64 = opt.attr("value")
+            if (base64.isBlank()) continue
+            try {
+                val cleaned = base64.replace("\\s".toRegex(), "")
+                val decodedHtml = base64Decode(cleaned)
+                val iframeTag = Jsoup.parse(decodedHtml).selectFirst("iframe")
+                val mirrorUrl = when {
+                    iframeTag?.attr("src")?.isNotBlank() == true -> iframeTag.attr("src")
+                    iframeTag?.attr("data-src")?.isNotBlank() == true -> iframeTag.attr("data-src")
+                    else -> null
+                }
+                if (!mirrorUrl.isNullOrBlank()) {
+                    loadExtractor(httpsify(mirrorUrl), data, subtitleCallback, callback)
+                }
+            } catch (_: Exception) {
+                // ignore broken mirrors
             }
-
-        } catch (e: Exception) {
-            println("Mirror decode error: ${e.localizedMessage}")
         }
-    }
 
-
-    // ===== CASE 3: DOWNLOAD LINKS (.dlbox) =====
-    val downloadLinks = document.select("div.dlbox li span.e a[href]")
-
-    for (a in downloadLinks) {
-        val url = a.attr("href")?.trim()
-
-        if (!url.isNullOrBlank()) {
-            loadExtractor(httpsify(url), data, subtitleCallback, callback)
+        val downloadLinks = document.select("div.dlbox li span.e a[href]")
+        for (a in downloadLinks) {
+            val url = a.attr("href").trim()
+            if (url.isNotBlank()) {
+                loadExtractor(httpsify(url), data, subtitleCallback, callback)
+            }
         }
+
+        return true
     }
-
-
-    return true
-}
 
 
     private fun Element.getImageAttr(): String {
