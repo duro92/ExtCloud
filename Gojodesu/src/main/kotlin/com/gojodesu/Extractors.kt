@@ -8,6 +8,7 @@ import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.extractors.Filesim
 import com.lagradost.cloudstream3.extractors.EmturbovidExtractor
 import com.lagradost.cloudstream3.utils.loadExtractor
@@ -96,5 +97,38 @@ open class Kotakajaib : ExtractorApi() {
 class Emturbovid : EmturbovidExtractor() {
     override var name = "Emturbovid"
     override var mainUrl = "https://turbovidhls.com"
-}
 
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        val response = app.get(url, referer = referer ?: "$mainUrl/")
+        val script = response.document.selectXpath(
+            "//script[contains(text(),'urlPlay') or contains(text(),'sources') or contains(text(),'file')]"
+        ).joinToString("\n") { it.html() }
+
+        val directUrl = Regex("urlPlay\\s*=\\s*'([^']+)'")
+            .find(script)?.groupValues?.getOrNull(1)
+            ?: Regex("file\\s*:\\s*\"([^\"]+)\"")
+                .find(script)?.groupValues?.getOrNull(1)
+            ?: Regex("file\\s*:\\s*'([^']+)'")
+                .find(script)?.groupValues?.getOrNull(1)
+
+        if (directUrl.isNullOrBlank()) return null
+
+        val type = if (directUrl.contains(".m3u8", true)) {
+            ExtractorLinkType.M3U8
+        } else {
+            ExtractorLinkType.VIDEO
+        }
+
+        return listOf(
+            newExtractorLink(
+                source = name,
+                name = name,
+                url = directUrl,
+                type = type
+            ) {
+                this.referer = "$mainUrl/"
+                this.quality = Qualities.Unknown.value
+            }
+        )
+    }
+}
