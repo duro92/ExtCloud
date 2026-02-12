@@ -14,9 +14,9 @@ cloudstream {
      * */
     status = 1 // will be 3 if unspecified
     tvTypes = listOf(
-        "AsianDrama",
-        "TvSeries",
-        "Movie",
+        "AnimeMovie",
+        "OVA",
+        "Anime",
     )
 
     iconUrl = "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://v2.hidoristream.online&size=%size%"
