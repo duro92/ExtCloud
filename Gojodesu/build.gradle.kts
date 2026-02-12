@@ -1,7 +1,7 @@
-version = 2
+version = 1
 
 cloudstream {
-    description = "Anoboy"
+    description = "Gojodesu - Anime Streaming Site"
     language = "id"
     authors = listOf("Duro92")
 
@@ -19,5 +19,5 @@ cloudstream {
         "Anime",
     )
 
-    iconUrl = "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://anoboy.be&size=%size%"
+    iconUrl = "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://gojodesu.com&size=%size%"
 }
