@@ -86,7 +86,12 @@ class Hidoristream : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
 
-        val title = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
+        val title = document.selectFirst("h1.entry-title")
+            ?.text()
+            ?.replace(Regex("\\b(Sub(\\s*)?(title)?\\s*Indonesia|Subtitle\\s*Indonesia)\\b", RegexOption.IGNORE_CASE), "")
+            ?.replace(Regex("\\s+"), " ")
+            ?.trim()
+            .orEmpty()
         val poster = document.selectFirst("div.bigcontent img")?.getImageAttr()?.let { fixUrlNull(it) }
 
         val description = document.select("div.entry-content p")
@@ -271,5 +276,4 @@ class Hidoristream : MainAPI() {
             ?: this?.attr("src")
     }
 }
-
 
