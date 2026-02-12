@@ -12,7 +12,7 @@ import org.jsoup.nodes.Element
 
 class Anoboy : MainAPI() {
     override var mainUrl = "http://anoboy.be"
-    override var name = "Anoboy"
+    override var name = "Anoboy👺"
     override val hasMainPage = true
     override var lang = "id"
 
