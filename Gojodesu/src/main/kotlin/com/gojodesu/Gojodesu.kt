@@ -9,6 +9,7 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
+import java.net.URI
 
 class Gojodesu : MainAPI() {
     override var mainUrl = "https://gojodesu.com"
@@ -219,11 +220,18 @@ class Gojodesu : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
+        fun refererFromUrl(url: String, fallback: String): String {
+            return runCatching {
+                val uri = URI(url)
+                if (uri.host.isNullOrBlank()) fallback else "${uri.scheme}://${uri.host}/"
+            }.getOrElse { fallback }
+        }
 
         document.selectFirst("div.player-embed iframe")
             ?.getIframeAttr()
             ?.let { iframe ->
-                loadExtractor(httpsify(iframe), data, subtitleCallback, callback)
+                val src = httpsify(iframe)
+                loadExtractor(src, refererFromUrl(src, data), subtitleCallback, callback)
             }
 
         val mirrorOptions = document.select("select.mirror option[value]:not([disabled])")
@@ -240,7 +248,8 @@ class Gojodesu : MainAPI() {
                     else -> null
                 }
                 if (!mirrorUrl.isNullOrBlank()) {
-                    loadExtractor(httpsify(mirrorUrl), data, subtitleCallback, callback)
+                    val src = httpsify(mirrorUrl)
+                    loadExtractor(src, refererFromUrl(src, data), subtitleCallback, callback)
                 }
             } catch (_: Exception) {
                 // ignore broken mirrors

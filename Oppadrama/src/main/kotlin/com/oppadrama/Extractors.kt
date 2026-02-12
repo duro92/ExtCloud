@@ -9,6 +9,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.Qualities
 
 
 
@@ -20,6 +21,50 @@ class Smoothpre: VidHidePro() {
 class Emturbovid : EmturbovidExtractor() {
     override var name = "Emturbovid"
     override var mainUrl = "https://turbovidhls.com"
+
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        val response = app.get(url, referer = referer ?: "$mainUrl/")
+        val script = response.document.selectXpath(
+            "//script[contains(text(),'urlPlay') or contains(text(),'sources') or contains(text(),'file')]"
+        ).joinToString("\n") { it.html() } + "\n" + response.text
+
+        fun normalizeUrl(raw: String): String {
+            return raw
+                .replace("\\u002F", "/")
+                .replace("\\u003A", ":")
+                .replace("\\/", "/")
+                .trim()
+                .let { if (it.startsWith("//")) "https:$it" else it }
+        }
+
+        val directUrl = listOf(
+            Regex("urlPlay\\s*=\\s*['\"]([^'\"]+)['\"]").find(script)?.groupValues?.getOrNull(1),
+            Regex("file\\s*:\\s*\"([^\"]+)\"").find(script)?.groupValues?.getOrNull(1),
+            Regex("file\\s*:\\s*'([^']+)'").find(script)?.groupValues?.getOrNull(1),
+            Regex("src\\s*:\\s*\"([^\"]+)\"").find(script)?.groupValues?.getOrNull(1),
+            Regex("src\\s*:\\s*'([^']+)'").find(script)?.groupValues?.getOrNull(1),
+        ).firstOrNull { !it.isNullOrBlank() }?.let { normalizeUrl(it) }
+
+        if (directUrl.isNullOrBlank()) return null
+
+        val type = if (directUrl.contains(".m3u8", true)) {
+            ExtractorLinkType.M3U8
+        } else {
+            ExtractorLinkType.VIDEO
+        }
+
+        return listOf(
+            newExtractorLink(
+                source = name,
+                name = name,
+                url = directUrl,
+                type = type
+            ) {
+                this.referer = "$mainUrl/"
+                this.quality = Qualities.Unknown.value
+            }
+        )
+    }
 }
 
 class BuzzServer : ExtractorApi() {

@@ -102,14 +102,24 @@ class Emturbovid : EmturbovidExtractor() {
         val response = app.get(url, referer = referer ?: "$mainUrl/")
         val script = response.document.selectXpath(
             "//script[contains(text(),'urlPlay') or contains(text(),'sources') or contains(text(),'file')]"
-        ).joinToString("\n") { it.html() }
+        ).joinToString("\n") { it.html() } + "\n" + response.text
 
-        val directUrl = Regex("urlPlay\\s*=\\s*'([^']+)'")
-            .find(script)?.groupValues?.getOrNull(1)
-            ?: Regex("file\\s*:\\s*\"([^\"]+)\"")
-                .find(script)?.groupValues?.getOrNull(1)
-            ?: Regex("file\\s*:\\s*'([^']+)'")
-                .find(script)?.groupValues?.getOrNull(1)
+        fun normalizeUrl(raw: String): String {
+            return raw
+                .replace("\\u002F", "/")
+                .replace("\\u003A", ":")
+                .replace("\\/", "/")
+                .trim()
+                .let { if (it.startsWith("//")) "https:$it" else it }
+        }
+
+        val directUrl = listOf(
+            Regex("urlPlay\\s*=\\s*['\"]([^'\"]+)['\"]").find(script)?.groupValues?.getOrNull(1),
+            Regex("file\\s*:\\s*\"([^\"]+)\"").find(script)?.groupValues?.getOrNull(1),
+            Regex("file\\s*:\\s*'([^']+)'").find(script)?.groupValues?.getOrNull(1),
+            Regex("src\\s*:\\s*\"([^\"]+)\"").find(script)?.groupValues?.getOrNull(1),
+            Regex("src\\s*:\\s*'([^']+)'").find(script)?.groupValues?.getOrNull(1),
+        ).firstOrNull { !it.isNullOrBlank() }?.let { normalizeUrl(it) }
 
         if (directUrl.isNullOrBlank()) return null
 

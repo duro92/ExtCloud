@@ -13,8 +13,9 @@ import com.lagradost.cloudstream3.newMovieSearchResponse
 import com.lagradost.cloudstream3.newTvSeriesLoadResponse  
 import com.lagradost.cloudstream3.newMovieLoadResponse  
 import com.lagradost.cloudstream3.newEpisode  
-import com.lagradost.cloudstream3.utils.*  
+import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
+import java.net.URI
 import org.jsoup.Jsoup
 
 
@@ -202,13 +203,20 @@ val episodes = episodeElements
 ): Boolean {
 
     val document = app.get(data).document
+    fun refererFromUrl(url: String, fallback: String): String {
+        return runCatching {
+            val uri = URI(url)
+            if (uri.host.isNullOrBlank()) fallback else "${uri.scheme}://${uri.host}/"
+        }.getOrElse { fallback }
+    }
 
 
     // ===== CASE 1: IFRAME PLAYER UTAMA (emturbovid) =====
     document.selectFirst("div.player-embed iframe")
         ?.getIframeAttr()
         ?.let { iframe ->
-            loadExtractor(httpsify(iframe), data, subtitleCallback, callback)
+            val src = httpsify(iframe)
+            loadExtractor(src, refererFromUrl(src, data), subtitleCallback, callback)
         }
 
 
@@ -235,7 +243,8 @@ val episodes = episodeElements
             }
 
             if (!mirrorUrl.isNullOrBlank()) {
-                loadExtractor(httpsify(mirrorUrl), data, subtitleCallback, callback)
+                val src = httpsify(mirrorUrl)
+                loadExtractor(src, refererFromUrl(src, data), subtitleCallback, callback)
             }
 
         } catch (e: Exception) {
