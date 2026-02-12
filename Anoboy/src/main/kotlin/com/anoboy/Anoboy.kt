@@ -26,11 +26,24 @@ class Anoboy : MainAPI() {
     override var name = "Anoboy👺"
     override val hasMainPage = true
     override var lang = "id"
-    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
+    
+    override val supportedTypes = setOf(
+        TvType.Anime,
+        TvType.AnimeMovie,
+        TvType.OVA
+    )
 
     companion object {
-        var context: android.content.Context? = null
-        
+        fun getType(t: String?): TvType {
+            if (t == null) return TvType.Anime
+            return when {
+                t.contains("Tv", true) -> TvType.Anime
+                t.contains("Movie", true) -> TvType.AnimeMovie
+                t.contains("OVA", true) || t.contains("Special", true) -> TvType.OVA
+                else -> TvType.Anime
+            }
+        }
+
         fun getStatus(t: String): ShowStatus {
             return when (t) {
                 "Completed" -> ShowStatus.Completed
@@ -56,7 +69,7 @@ class Anoboy : MainAPI() {
         return newHomePageResponse(HomePageList(request.name, items), hasNext = items.isNotEmpty())
     }
 
-    private fun Element.toSearchResult(): SearchResponse? {
+    private fun Element.toSearchResult(): AnimeSearchResponse {
     val linkElement = this.selectFirst("a") ?: return null
     val href = fixUrl(linkElement.attr("href"))
     val title = linkElement.attr("title").ifBlank {
@@ -67,14 +80,10 @@ class Anoboy : MainAPI() {
     val isSeries = href.contains("/series/", true) || href.contains("drama", true)
 
     return if (isSeries) {
-        newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+        newAnimeSearchResponse(title, href, TvType.TvSeries) {
             this.posterUrl = poster
         }
-    } else {
-        newMovieSearchResponse(title, href, TvType.Movie) {
-            this.posterUrl = poster
-        }
-    }
+    } 
 }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -161,10 +170,13 @@ val episodes = episodeElements
         }
     }
 
+val tracker = APIHolder.getTracker(listOf(title), TrackerType.getTypes(type), year, true)
+
     return if (episodes.size > 1) {
     // TV Series
-    newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-        this.posterUrl = poster
+    newAnimeLoadResponse(title, url, type) {
+        posterUrl = tracker?.image ?: poster
+        backgroundPosterUrl = tracker?.cover
         this.year = year
         this.plot = description
         this.tags = tags
@@ -174,22 +186,9 @@ val episodes = episodeElements
         if (rating != null) addScore(rating.toString(), 10)
         addActors(actors)
         addTrailer(trailer)
-    }
-} else {
-    // Movie
-    newMovieLoadResponse(title, url, TvType.Movie, episodes.firstOrNull()?.data ?: url) {
-        this.posterUrl = poster
-        this.year = year
-        this.plot = description
-        this.tags = tags
-        this.recommendations = recommendations
-        this.duration = duration ?: 0
-        if (rating != null) addScore(rating.toString(), 10)
-        addActors(actors)
-        addTrailer(trailer)
-    }
-}
-
+        addMalId(tracker?.malId)
+        addAniListId(tracker?.aniId?.toIntOrNull())
+    } 
 }
        
     override suspend fun loadLinks(
