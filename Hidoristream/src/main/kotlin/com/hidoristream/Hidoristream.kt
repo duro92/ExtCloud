@@ -62,8 +62,12 @@ class Hidoristream : MainAPI() {
         val title = selectFirst("div.tt")?.text()?.trim()
             ?: selectFirst("a")?.attr("title")?.trim()
             ?: return null
+        val cleanTitle = title
+            .replace(Regex("\\b(Sub(\\s*)?(title)?\\s*Indonesia|Subtitle\\s*Indonesia|Sub\\s*Indo)\\b", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("\\s+"), " ")
+            .trim()
         val poster = selectFirst("img")?.getImageAttr()?.let { fixUrlNull(it) }
-        return newAnimeSearchResponse(title, fixUrl(link), TvType.Anime) {
+        return newAnimeSearchResponse(cleanTitle, fixUrl(link), TvType.Anime) {
             posterUrl = poster
         }
     }
@@ -76,9 +80,13 @@ class Hidoristream : MainAPI() {
 
     private fun Element.toRecommendResult(): SearchResponse? {
         val title = selectFirst("div.tt")?.text()?.trim() ?: return null
+        val cleanTitle = title
+            .replace(Regex("\\b(Sub(\\s*)?(title)?\\s*Indonesia|Subtitle\\s*Indonesia|Sub\\s*Indo)\\b", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("\\s+"), " ")
+            .trim()
         val href = selectFirst("a")?.attr("href") ?: return null
         val posterUrl = selectFirst("img")?.getImageAttr()?.let { fixUrlNull(it) }
-        return newMovieSearchResponse(title, fixUrl(href), TvType.Movie) {
+        return newMovieSearchResponse(cleanTitle, fixUrl(href), TvType.Movie) {
             this.posterUrl = posterUrl
         }
     }
@@ -276,4 +284,3 @@ class Hidoristream : MainAPI() {
             ?: this?.attr("src")
     }
 }
-
