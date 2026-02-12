@@ -132,7 +132,7 @@ class MovieBoxProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        //"4516404531735022304" to "Trending",
+       "4516404531735022304" to "Trending",
         //"5692654647815587592" to "Trending in Cinema",
         //"414907768299210008"  to "Bollywood",
         //"3859721901924910512" to "South Indian",
@@ -145,6 +145,8 @@ class MovieBoxProvider : MainAPI() {
         //"8788126208987989488" to "Chinese Drama",
         //"3910636007619709856" to "Western TV",
         //"5177200225164885656" to "Turkish Drama",
+        "1|1;country=Indonesia" to "Indonesian (Movies)",
+        "1|2;country=Indonesia" to "Indonesian (Series)",
         "1|1" to "Movies",
         "1|2" to "Series",
         "1|1006" to "Anime",
