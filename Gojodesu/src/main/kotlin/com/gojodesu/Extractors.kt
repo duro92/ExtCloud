@@ -15,6 +15,13 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import org.jsoup.Jsoup
 import java.net.URI
+import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 
 open class Kotakajaib : ExtractorApi() {
@@ -107,6 +114,12 @@ open class Emturbovid : EmturbovidExtractor() {
     // Host in iframe biasanya emturbovid.com (kemudian bisa redirect ke turbovidhls.com).
     override var mainUrl = "https://emturbovid.com"
 
+    companion object {
+        private val startedPings: MutableSet<String> =
+            Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+        private val pingScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    }
+
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val response = app.get(url, referer = referer ?: "$mainUrl/")
         val script = response.document.selectXpath(
@@ -172,7 +185,16 @@ open class Emturbovid : EmturbovidExtractor() {
 
         if (directUrl.isNullOrBlank()) return null
 
-        val refererHeader = runCatching {
+        val isTurbosLike = runCatching {
+            val host = URI(directUrl).host?.lowercase().orEmpty()
+            host.contains("turboviplay.com") ||
+                host.contains("turbosplayer.com") ||
+                host.contains("cfturbovp.com") ||
+                host.contains("clftbvp.com")
+        }.getOrDefault(false)
+
+        // Embed page uses <meta name="referrer" content="no-referrer">, so don't send referer for these hosts.
+        val refererHeader = if (isTurbosLike) "" else runCatching {
             val uri = URI(response.url)
             "${uri.scheme}://${uri.host}/"
         }.getOrElse { referer ?: "$mainUrl/" }
@@ -180,10 +202,46 @@ open class Emturbovid : EmturbovidExtractor() {
         val type = if (directUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
 
         // Some hosts behave poorly with okhttp UA + range requests; force a browser UA.
+        val ua = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
         val headers = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36",
+            "User-Agent" to ua,
             "Accept" to "*/*",
         )
+
+        // Keep-alive pings: this host sometimes cuts the stream after a few minutes unless view endpoints are hit.
+        // Best-effort and capped to avoid runaway background work.
+        val videoId = Regex("var\\s+videoID\\s*=\\s*['\"]([^'\"]+)['\"]", RegexOption.IGNORE_CASE)
+            .find(script)?.groupValues?.getOrNull(1)
+        val userId = Regex("var\\s+userID\\s*=\\s*['\"]([^'\"]+)['\"]", RegexOption.IGNORE_CASE)
+            .find(script)?.groupValues?.getOrNull(1)
+
+        if (!videoId.isNullOrBlank() && !userId.isNullOrBlank() && startedPings.add("$userId:$videoId")) {
+            val pingHeaders = mapOf(
+                "User-Agent" to ua,
+                "X-Requested-With" to "XMLHttpRequest",
+                "Accept" to "*/*",
+            )
+            pingScope.launch {
+                suspend fun ping(url: String) {
+                    // Embed page explicitly sets no-referrer, so don't send referer.
+                    runCatching { app.get(url, headers = pingHeaders) }
+                }
+
+                // Mimic the embed behavior: register view and keep it warm for ~1 hour.
+                ping("https://ver02.sptvp.com/watch?videoID=$videoId&userID=$userId")
+                ping("https://ver03.sptvp.com/watch?videoID=$videoId&userID=$userId")
+
+                delay(30_000)
+                ping("https://ver02.sptvp.com/watch30s")
+
+                repeat(12) { // ~48 minutes
+                    delay(240_000)
+                    ping("https://ver02.sptvp.com/watch5p")
+                    ping("https://ver02.sptvp.com/watch?videoID=$videoId&userID=$userId")
+                    ping("https://ver03.sptvp.com/watch?videoID=$videoId&userID=$userId")
+                }
+            }
+        }
 
         val link = newExtractorLink(name, name, directUrl, type) {
             this.referer = refererHeader

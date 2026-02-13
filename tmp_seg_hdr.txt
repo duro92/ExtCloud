@@ -1,0 +1,17 @@
+HTTP/1.1 206 Partial Content
+Date: Fri, 13 Feb 2026 03:32:47 GMT
+Content-Type: image/png
+Content-Length: 16
+Connection: keep-alive
+Report-To: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=jqLjo45vd9eNxonGZBWwqyZJMwxS5wdQkED0PFEqngMBNG%2Fno7opnqk%2FaxMIGtYoQh5Y3AdXkPgeyGrQYFhfVa5wGLayfkJ%2FrpB4s3n08OhIWFQuAL%2FZKgM%3D"}]}
+Nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+Server: cloudflare
+Age: 264
+Cache-Control: public, max-age=31536000
+ETag: "78e786d389e6f408aa1b354c1d8d26c9"
+Last-Modified: Fri, 13 Feb 2026 02:41:49 GMT
+Vary: Accept-Encoding
+content-range: bytes 0-15/417966
+cf-cache-status: HIT
+CF-RAY: 9cd142b67df0ff83-SIN
+

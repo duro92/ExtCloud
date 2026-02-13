@@ -1,0 +1,19 @@
+HTTP/1.1 200 OK
+Date: Fri, 13 Feb 2026 03:27:28 GMT
+Content-Type: application/vnd.apple.mpegurl
+Content-Length: 531
+Connection: keep-alive
+Server: cloudflare
+Last-Modified: Fri, 13 Feb 2026 02:42:02 GMT
+Nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+ETag: "698e8f7a-213"
+Access-Control-Allow-Origin: *
+Access-Control-Allow-Methods: GET, POST, OPTIONS
+Access-Control-Allow-Headers: DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range
+Access-Control-Expose-Headers: Content-Length,Content-Range
+Accept-Ranges: bytes
+cf-cache-status: DYNAMIC
+Report-To: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=UE0jcTma%2FgKJPiJxKihLRqPpBXR%2B1U0KpadYx0vZm2ji5tZKozSbadz1lbbrkQygrQ79c4tm4QwIkoiXNWNvrLo7vgTHSprW7hurxINiRAnxgEAVsocqyluem%2F446nf3"}]}
+CF-RAY: 9cd13aeb6ce6f9b3-SIN
+alt-svc: h3=":443"; ma=86400
+
