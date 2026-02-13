@@ -13,6 +13,7 @@ import com.lagradost.cloudstream3.extractors.Filesim
 import com.lagradost.cloudstream3.extractors.EmturbovidExtractor
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import java.net.URI
 
 
 open class Kotakajaib : ExtractorApi() {
@@ -96,7 +97,8 @@ open class Kotakajaib : ExtractorApi() {
 
 class Emturbovid : EmturbovidExtractor() {
     override var name = "Emturbovid"
-    override var mainUrl = "https://turbovidhls.com"
+    // Host in iframe biasanya emturbovid.com (kemudian bisa redirect ke turbovidhls.com).
+    override var mainUrl = "https://emturbovid.com"
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val response = app.get(url, referer = referer ?: "$mainUrl/")
@@ -105,23 +107,68 @@ class Emturbovid : EmturbovidExtractor() {
         ).joinToString("\n") { it.html() } + "\n" + response.text
 
         fun normalizeUrl(raw: String): String {
-            return raw
+            val clean = raw
                 .replace("\\u002F", "/")
                 .replace("\\u003A", ":")
                 .replace("\\/", "/")
                 .trim()
-                .let { if (it.startsWith("//")) "https:$it" else it }
+
+            return when {
+                clean.startsWith("//") -> "https:$clean"
+                clean.startsWith("http://") || clean.startsWith("https://") -> clean
+                clean.startsWith("/") -> runCatching {
+                    val base = URI(response.url)
+                    "${base.scheme}://${base.host}$clean"
+                }.getOrElse { clean }
+                else -> runCatching { URI(response.url).resolve(clean).toString() }.getOrDefault(clean)
+            }
         }
 
-        val directUrl = listOf(
-            Regex("urlPlay\\s*=\\s*['\"]([^'\"]+)['\"]").find(script)?.groupValues?.getOrNull(1),
-            Regex("file\\s*:\\s*\"([^\"]+)\"").find(script)?.groupValues?.getOrNull(1),
-            Regex("file\\s*:\\s*'([^']+)'").find(script)?.groupValues?.getOrNull(1),
-            Regex("src\\s*:\\s*\"([^\"]+)\"").find(script)?.groupValues?.getOrNull(1),
-            Regex("src\\s*:\\s*'([^']+)'").find(script)?.groupValues?.getOrNull(1),
-        ).firstOrNull { !it.isNullOrBlank() }?.let { normalizeUrl(it) }
+        fun isLikelyMediaUrl(raw: String): Boolean {
+            if (!raw.startsWith("http://") && !raw.startsWith("https://")) return false
+            val lowered = raw.lowercase()
+            if (lowered.contains(".js") || lowered.contains(".css")) return false
+            if (lowered.contains(".png") || lowered.contains(".jpg") || lowered.contains(".jpeg") || lowered.contains(".gif") || lowered.contains(".svg") || lowered.contains(".ico")) return false
+            return lowered.contains(".m3u8") ||
+                lowered.contains(".mp4") ||
+                lowered.contains(".mkv") ||
+                lowered.contains(".webm") ||
+                lowered.contains("/uploads/") ||
+                lowered.contains("/playlist") ||
+                lowered.contains("/hls/")
+        }
+
+        fun score(raw: String): Int {
+            val lowered = raw.lowercase()
+            return when {
+                lowered.contains(".m3u8") -> 4
+                lowered.contains(".mp4") -> 3
+                lowered.contains(".mkv") || lowered.contains(".webm") -> 2
+                else -> 1
+            }
+        }
+
+        val patterns = listOf(
+            Regex("urlPlay\\s*=\\s*['\"]([^'\"]+)['\"]", RegexOption.IGNORE_CASE),
+            Regex("file\\s*:\\s*['\"]([^'\"]+)['\"]", RegexOption.IGNORE_CASE),
+            Regex("\"file\"\\s*:\\s*\"([^\"]+)\"", RegexOption.IGNORE_CASE),
+            Regex("'file'\\s*:\\s*'([^']+)'", RegexOption.IGNORE_CASE),
+        )
+
+        val directUrl = patterns
+            .flatMap { regex -> regex.findAll(script).map { it.groupValues[1] }.toList() }
+            .map { normalizeUrl(it) }
+            .filter { isLikelyMediaUrl(it) }
+            .distinct()
+            .sortedByDescending { score(it) }
+            .firstOrNull()
 
         if (directUrl.isNullOrBlank()) return null
+
+        val refererHeader = runCatching {
+            val uri = URI(response.url)
+            "${uri.scheme}://${uri.host}/"
+        }.getOrElse { referer ?: "$mainUrl/" }
 
         val type = if (directUrl.contains(".m3u8", true)) {
             ExtractorLinkType.M3U8
@@ -136,9 +183,14 @@ class Emturbovid : EmturbovidExtractor() {
                 url = directUrl,
                 type = type
             ) {
-                this.referer = "$mainUrl/"
+                this.referer = refererHeader
                 this.quality = Qualities.Unknown.value
             }
         )
     }
+}
+
+class Turbovidhls : Emturbovid() {
+    override var name = "Turbovidhls"
+    override var mainUrl = "https://turbovidhls.com"
 }
