@@ -6,13 +6,13 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.base64Decode
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.extractors.Filesim
 import com.lagradost.cloudstream3.extractors.EmturbovidExtractor
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import org.jsoup.Jsoup
 import java.net.URI
 
 
@@ -32,12 +32,18 @@ open class Kotakajaib : ExtractorApi() {
         // Embed servers (data-frame)
         val links = document.select("ul#dropdown-server li a")
         for (a in links) {
-            loadExtractor(
-                base64Decode(a.attr("data-frame")),
-                "$mainUrl/",
-                subtitleCallback,
-                callback
-            )
+            val decoded = base64Decode(a.attr("data-frame")).trim()
+            val iframe = Jsoup.parse(decoded).selectFirst("iframe")
+            val rawSrc = when {
+                iframe?.attr("src")?.isNotBlank() == true -> iframe.attr("src")
+                iframe?.attr("data-src")?.isNotBlank() == true -> iframe.attr("data-src")
+                else -> decoded
+            }.replace("&amp;", "&").trim()
+
+            val src = if (rawSrc.startsWith("//")) "https:$rawSrc" else rawSrc
+            if (src.startsWith("http")) {
+                loadExtractor(src, url, subtitleCallback, callback)
+            }
         }
 
         // Download buttons on Kotakajaib page
@@ -170,22 +176,25 @@ open class Emturbovid : EmturbovidExtractor() {
             "${uri.scheme}://${uri.host}/"
         }.getOrElse { referer ?: "$mainUrl/" }
 
-        val type = if (directUrl.contains(".m3u8", true)) {
-            ExtractorLinkType.M3U8
-        } else {
-            ExtractorLinkType.VIDEO
-        }
+        val type = if (directUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+
+        // Some hosts behave poorly with okhttp UA + range requests; force a browser UA.
+        val headers = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36",
+            "Accept" to "*/*",
+        )
 
         return listOf(
-            newExtractorLink(
-                source = name,
-                name = name,
-                url = directUrl,
-                type = type
-            ) {
-                this.referer = refererHeader
-                this.quality = Qualities.Unknown.value
-            }
+            ExtractorLink(
+                name,
+                name,
+                directUrl,
+                refererHeader,
+                Qualities.Unknown.value,
+                type,
+                headers,
+                ""
+            )
         )
     }
 }

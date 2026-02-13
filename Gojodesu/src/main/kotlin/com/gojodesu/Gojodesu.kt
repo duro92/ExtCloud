@@ -4,12 +4,11 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
-import com.lagradost.cloudstream3.LoadResponse.Companion.addScore
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
+import com.lagradost.cloudstream3.LoadResponse.Companion.addRating
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
-import java.net.URI
 
 class Gojodesu : MainAPI() {
     override var mainUrl = "https://gojodesu.com"
@@ -187,7 +186,8 @@ class Gojodesu : MainAPI() {
                 this.recommendations = recommendations
                 this.duration = duration ?: 0
                 addEpisodes(DubStatus.Subbed, episodes)
-                rating?.let { addScore(it.toString(), 10) }
+                // Cloudstream rating is int (0-100)
+                rating?.let { addRating((it * 10).toInt()) }
                 addActors(actors)
                 if (castList.isNotEmpty()) this.actors = castList
                 addTrailer(trailer)
@@ -203,7 +203,8 @@ class Gojodesu : MainAPI() {
                 this.tags = tags
                 this.recommendations = recommendations
                 this.duration = duration ?: 0
-                rating?.let { addScore(it.toString(), 10) }
+                // Cloudstream rating is int (0-100)
+                rating?.let { addRating((it * 10).toInt()) }
                 addActors(actors)
                 if (castList.isNotEmpty()) this.actors = castList
                 addTrailer(trailer)
@@ -220,18 +221,13 @@ class Gojodesu : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
-        fun refererFromUrl(url: String, fallback: String): String {
-            return runCatching {
-                val uri = URI(url)
-                if (uri.host.isNullOrBlank()) fallback else "${uri.scheme}://${uri.host}/"
-            }.getOrElse { fallback }
-        }
 
         document.selectFirst("div.player-embed iframe")
             ?.getIframeAttr()
             ?.let { iframe ->
                 val src = httpsify(iframe)
-                loadExtractor(src, refererFromUrl(src, data), subtitleCallback, callback)
+                // Referer harus halaman episode (anti-leech embed biasanya cek origin embedder).
+                loadExtractor(src, data, subtitleCallback, callback)
             }
 
         val mirrorOptions = document.select("select.mirror option[value]:not([disabled])")
@@ -249,7 +245,7 @@ class Gojodesu : MainAPI() {
                 }
                 if (!mirrorUrl.isNullOrBlank()) {
                     val src = httpsify(mirrorUrl)
-                    loadExtractor(src, refererFromUrl(src, data), subtitleCallback, callback)
+                    loadExtractor(src, data, subtitleCallback, callback)
                 }
             } catch (_: Exception) {
                 // ignore broken mirrors
