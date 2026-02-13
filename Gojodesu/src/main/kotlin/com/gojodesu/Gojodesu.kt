@@ -5,7 +5,7 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
-import com.lagradost.cloudstream3.LoadResponse.Companion.addRating
+import com.lagradost.cloudstream3.LoadResponse.Companion.addScore
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
@@ -186,8 +186,7 @@ class Gojodesu : MainAPI() {
                 this.recommendations = recommendations
                 this.duration = duration ?: 0
                 addEpisodes(DubStatus.Subbed, episodes)
-                // Cloudstream rating is int (0-100)
-                rating?.let { addRating((it * 10).toInt()) }
+                rating?.let { addScore(it.toString(), 10) }
                 addActors(actors)
                 if (castList.isNotEmpty()) this.actors = castList
                 addTrailer(trailer)
@@ -203,8 +202,7 @@ class Gojodesu : MainAPI() {
                 this.tags = tags
                 this.recommendations = recommendations
                 this.duration = duration ?: 0
-                // Cloudstream rating is int (0-100)
-                rating?.let { addRating((it * 10).toInt()) }
+                rating?.let { addScore(it.toString(), 10) }
                 addActors(actors)
                 if (castList.isNotEmpty()) this.actors = castList
                 addTrailer(trailer)

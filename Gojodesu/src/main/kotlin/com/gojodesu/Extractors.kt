@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.base64Decode
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.extractors.Filesim
@@ -184,18 +185,13 @@ open class Emturbovid : EmturbovidExtractor() {
             "Accept" to "*/*",
         )
 
-        return listOf(
-            ExtractorLink(
-                name,
-                name,
-                directUrl,
-                refererHeader,
-                Qualities.Unknown.value,
-                type,
-                headers,
-                ""
-            )
-        )
+        val link = newExtractorLink(name, name, directUrl, type) {
+            this.referer = refererHeader
+            this.quality = Qualities.Unknown.value
+            this.headers = headers
+        }
+
+        return listOf(link)
     }
 }
 
