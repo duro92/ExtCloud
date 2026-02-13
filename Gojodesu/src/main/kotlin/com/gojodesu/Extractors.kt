@@ -95,7 +95,7 @@ open class Kotakajaib : ExtractorApi() {
 
 
 
-class Emturbovid : EmturbovidExtractor() {
+open class Emturbovid : EmturbovidExtractor() {
     override var name = "Emturbovid"
     // Host in iframe biasanya emturbovid.com (kemudian bisa redirect ke turbovidhls.com).
     override var mainUrl = "https://emturbovid.com"
