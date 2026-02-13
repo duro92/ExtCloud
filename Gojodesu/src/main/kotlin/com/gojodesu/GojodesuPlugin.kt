@@ -11,6 +11,5 @@ class GojodesuPlugin : Plugin() {
         registerMainAPI(Gojodesu())
         registerExtractorAPI(Kotakajaib())
         registerExtractorAPI(Emturbovid())
-        registerExtractorAPI(Turbovidhls())
     }
 }
