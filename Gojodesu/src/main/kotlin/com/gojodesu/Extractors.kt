@@ -54,10 +54,9 @@ open class EmturbovidExtractor : ExtractorApi() {
     override var mainUrl = "https://emturbovid.com"
     override val requiresReferer = true
 
-    private fun hostBase(u: String): String = URI(u).let { "${it.scheme}://${it.host}" } // no trailing /
+    private fun hostBase(u: String): String = URI(u).let { "${it.scheme}://${it.host}" }
     private fun hostSlash(u: String): String = hostBase(u) + "/"
 
-    
     private suspend fun resolveMetaRedirect(startUrl: String, referer: String): String {
         var curUrl = startUrl
         var curRef = referer
@@ -67,17 +66,15 @@ open class EmturbovidExtractor : ExtractorApi() {
             val html = resp.text
             val ct = (resp.headers["content-type"] ?: "").lowercase()
 
-            
+            // stop kalau sudah playlist/video
             if (curUrl.contains(".m3u8", true) || curUrl.contains(".mp4", true)) return curUrl
             if (!ct.contains("text/html") && !ct.contains("application/xhtml")) return curUrl
 
-           
             val metaUrl = Regex(
                 """http-equiv\s*=\s*["']refresh["'][^>]*content\s*=\s*["'][^"']*url\s*=\s*'?([^"' >]+)""",
                 RegexOption.IGNORE_CASE
             ).find(html)?.groupValues?.getOrNull(1)
 
-            
             val linkUrl = Regex(
                 """Redirecting\s+to\s+<a\s+href=["']([^"']+)""",
                 RegexOption.IGNORE_CASE
@@ -90,32 +87,23 @@ open class EmturbovidExtractor : ExtractorApi() {
                 return@repeat
             }
 
-            
             return curUrl
         }
-
         return curUrl
     }
 
-   
-    private fun findM3u8InText(text: String): String? {
-        
-        return Regex("""https?://[^\s"'<>]+\.m3u8[^\s"'<>]*""")
-            .find(text)
-            ?.value
-    }
+    private fun findM3u8InText(text: String): String? =
+        Regex("""https?://[^\s"'<>]+\.m3u8[^\s"'<>]*""").find(text)?.value
 
-   
     private suspend fun unwrapToMasterM3u8(m3u8Url: String): String {
         return try {
-            val resp = app.get(
-                m3u8Url,
-                referer = hostSlash(m3u8Url),
-                allowRedirects = true
-            )
+            val resp = app.get(m3u8Url, referer = hostSlash(m3u8Url), allowRedirects = true)
             val body = resp.text
 
-            val inside = Regex("""https?://[^\s#]+/master\.m3u8[^\s#]*""").find(body)?.value
+            // kalau wrapper mengandung link master.m3u8 lain, ambil itu
+            val inside = Regex("""https?://[^\s#]+/master\.m3u8[^\s#]*""")
+                .find(body)?.value
+
             httpsify(inside ?: m3u8Url)
         } catch (_: Exception) {
             m3u8Url
@@ -125,24 +113,22 @@ open class EmturbovidExtractor : ExtractorApi() {
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val pageReferer = referer ?: "$mainUrl/"
 
-     
-        val resolved = resolveMetaRedirect(url, pageReferer)
+        // 1) Resolve meta refresh dulu (ini yang hilang di kode kamu)
+        val resolvedUrl = resolveMetaRedirect(url, pageReferer)
 
-        var foundM3u8: String? = null
-        if (resolved.contains(".m3u8", ignoreCase = true)) {
-            foundM3u8 = resolved
-        } else {
-           
-            val resp = app.get(resolved, referer = pageReferer, allowRedirects = true)
-            foundM3u8 = findM3u8InText(resp.text)
-        }
+        // 2) Ambil konten dari URL yang sudah resolved
+        val resp = app.get(resolvedUrl, referer = pageReferer, allowRedirects = true)
 
-        val firstM3u8 = foundM3u8?.let { httpsify(it) } ?: return null
+        // 3) Cari m3u8 dari HTML (atau kalau resolved sudah m3u8)
+        val firstM3u8 = when {
+            resolvedUrl.contains(".m3u8", true) -> resolvedUrl
+            else -> findM3u8InText(resp.text)
+        } ?: return null
 
-       
-        val finalM3u8 = unwrapToMasterM3u8(firstM3u8)
+        // 4) Unwrap ke master final (contoh: cdn1... -> g251.../master.m3u8)
+        val finalM3u8 = unwrapToMasterM3u8(httpsify(firstM3u8))
 
-        
+        // 5) Header untuk cegah 2004 (segment hotlink)
         val finalHost = hostBase(finalM3u8)
 
         return listOf(
@@ -153,8 +139,6 @@ open class EmturbovidExtractor : ExtractorApi() {
                 type = ExtractorLinkType.M3U8
             ) {
                 this.quality = Qualities.Unknown.value
-
-            
                 this.headers = mapOf(
                     "Referer" to "$finalHost/",
                     "Origin" to finalHost
