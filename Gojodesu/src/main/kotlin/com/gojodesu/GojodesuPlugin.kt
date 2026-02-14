@@ -10,6 +10,6 @@ class GojodesuPlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(Gojodesu())
         registerExtractorAPI(Kotakajaib())
-        registerExtractorAPI(EmturbovidExtractor())
+        registerExtractorAPI(Emturbovid())
     }
 }

@@ -10,6 +10,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.extractors.Filesim
+import com.lagradost.cloudstream3.extractors.EmturbovidExtractor
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.httpsify
@@ -49,163 +50,10 @@ open class Kotakajaib : ExtractorApi() {
     }
 }
 
-open class EmturbovidExtractor : ExtractorApi() {
+class Emturbovid : EmturbovidExtractor() {
     override var name = "Emturbovid"
-    override var mainUrl = "https://emturbovid.com"
-    override val requiresReferer = true
-
-    private val UA =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-
-    private fun hostBase(url: String): String {
-        val u = httpsify(url)
-        val m = Regex("""^(https?://[^/]+)""", RegexOption.IGNORE_CASE).find(u)
-        return m?.groupValues?.get(1) ?: mainUrl
-    }
-
-    private fun baseDir(url: String): String {
-        val u = httpsify(url)
-        return u.substringBeforeLast("/", u).trimEnd('/') + "/"
-    }
-
-    private suspend fun fetchText(url: String, referer: String): String {
-        return app.get(
-            url,
-            referer = referer,
-            allowRedirects = true,
-            headers = mapOf(
-                "User-Agent" to UA,
-                "Accept" to "*/*"
-            )
-        ).text
-    }
-
-    private suspend fun resolveRedirect(url: String, referer: String): String {
-        var current = httpsify(url)
-        var ref = referer
-
-        repeat(6) {
-            val resp = app.get(
-                current,
-                referer = ref,
-                allowRedirects = true,
-                headers = mapOf("User-Agent" to UA)
-            )
-            val html = resp.text
-
-            if (current.contains(".m3u8", true) || current.contains(".mp4", true)) return current
-
-            val meta = Regex(
-                """http-equiv\s*=\s*["']refresh["'][^>]*url\s*=\s*'?([^"' >]+)""",
-                RegexOption.IGNORE_CASE
-            ).find(html)?.groupValues?.getOrNull(1)
-
-            val link = Regex(
-                """Redirecting\s+to\s+<a\s+href=["']([^"']+)""",
-                RegexOption.IGNORE_CASE
-            ).find(html)?.groupValues?.getOrNull(1)
-
-            val next = (meta ?: link)?.trim() ?: return current
-
-            ref = current
-            current = httpsify(next)
-        }
-
-        return current
-    }
-
-    private fun findFirstM3u8(text: String): String? =
-        Regex("""https?://[^\s"'<>]+\.m3u8[^\s"'<>]*""").find(text)?.value
-
-    private fun findMasterInWrapper(wrapperBody: String): String? =
-        Regex("""https?://[^\s#]+/master\.m3u8[^\s#]*""").find(wrapperBody)?.value
-
-    private fun pickBestVariant(masterBody: String): String? {
-        val lines = masterBody.lines()
-        var bestUrl: String? = null
-        var bestBw = -1
-
-        var i = 0
-        while (i < lines.size) {
-            val line = lines[i].trim()
-            if (line.startsWith("#EXT-X-STREAM-INF", true)) {
-                val bw = Regex("""BANDWIDTH=(\d+)""").find(line)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
-                val next = lines.getOrNull(i + 1)?.trim()
-                if (!next.isNullOrBlank() && !next.startsWith("#")) {
-                    if (bw > bestBw) {
-                        bestBw = bw
-                        bestUrl = next
-                    }
-                }
-                i += 2
-                continue
-            }
-            i++
-        }
-        return bestUrl
-    }
-
-    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val upstreamRef = (referer ?: "$mainUrl/").trim()
-        val results = mutableListOf<ExtractorLink>()
-
-        val resolved = resolveRedirect(url, upstreamRef)
-
-        val html = runCatching {
-            if (resolved.contains(".m3u8", true)) "" else fetchText(resolved, upstreamRef)
-        }.getOrDefault("")
-
-        val wrapperM3u8 = (if (resolved.contains(".m3u8", true)) resolved else findFirstM3u8(html))
-            ?.let { httpsify(it) }
-            ?: return null
-
-        val wrapperRef = hostBase(wrapperM3u8).trimEnd('/') + "/"
-
-        val wrapperBody = runCatching { fetchText(wrapperM3u8, wrapperRef) }.getOrDefault("")
-
-        val masterUrl = (findMasterInWrapper(wrapperBody) ?: wrapperM3u8).let { httpsify(it) }
-
-        
-        fun makeLink(playUrl: String): ExtractorLink {
-            val origin = hostBase(playUrl)
-            return newExtractorLink(
-                source = name,
-                name = name,
-                url = playUrl,
-                type = ExtractorLinkType.M3U8
-            ) {
-                this.quality = Qualities.Unknown.value
-           
-                this.referer = upstreamRef
-                this.headers = mapOf(
-                    "Referer" to upstreamRef,
-                    "Origin" to origin,
-                    "User-Agent" to UA,
-                    "Accept" to "*/*"
-                )
-            }
-        }
-
-     
-        results.add(makeLink(masterUrl))
-
-       
-        val masterBody = runCatching { fetchText(masterUrl, wrapperRef) }.getOrDefault("")
-        val variantLine = pickBestVariant(masterBody)
-        if (!variantLine.isNullOrBlank()) {
-            val variantUrl = httpsify(
-                if (variantLine.startsWith("http", true)) variantLine else baseDir(masterUrl) + variantLine.trimStart('/')
-            )
-            results.add(makeLink(variantUrl))
-        }
-
-
-        if (masterUrl != wrapperM3u8) {
-            results.add(makeLink(wrapperM3u8))
-        }
-
-        return results.distinctBy { it.url }
-    }
+    override var mainUrl = "https://turbovidhls.com"
 }
+
 
 
