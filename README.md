@@ -1,6 +1,7 @@
 # ExtCloud: Kumpulan Ekstensi CloudStream untuk Konten Indonesia 
 
-ExtCloud adalah kumpulan ekstensi CloudStream yang beberapa providernya diambil dari berbagai sumber dan dijadikan satu agar lebih fokus ke konten Indonesia saja.
+ExtCloud adalah kumpulan ekstensi CloudStream yang beberapa providernya diambil dari berbagai sumber dan dijadikan satu agar lebih fokus ke konten Indonesia saja.
+
 
 ## Thanks To :
 
@@ -11,6 +12,8 @@ ExtCloud adalah kumpulan ekstensi CloudStream yang beberapa providernya diambil 
 5.  Zeeorepo : https://github.com/funeelo/zeeorepo
 6.  Sofie99 : https://github.com/Sofie99/cloudstream-extensions-sofie
 
+## Buat ngopi : 
+https://saweria.co/duro92
 
 
 
