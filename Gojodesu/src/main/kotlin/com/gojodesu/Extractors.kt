@@ -63,12 +63,9 @@ open class EmturbovidExtractor : ExtractorApi() {
         return m?.groupValues?.get(1) ?: mainUrl
     }
 
-    private fun hostSlash(url: String): String = hostBase(url).trimEnd('/') + "/"
-
-    private fun absUrl(base: String, u: String): String {
-        val x = u.trim()
-        if (x.startsWith("http", true)) return x
-        return base.trimEnd('/') + "/" + x.trimStart('/')
+    private fun baseDir(url: String): String {
+        val u = httpsify(url)
+        return u.substringBeforeLast("/", u).trimEnd('/') + "/"
     }
 
     private suspend fun fetchText(url: String, referer: String): String {
@@ -124,7 +121,6 @@ open class EmturbovidExtractor : ExtractorApi() {
         Regex("""https?://[^\s#]+/master\.m3u8[^\s#]*""").find(wrapperBody)?.value
 
     private fun pickBestVariant(masterBody: String): String? {
-        // Ambil variant dengan BANDWIDTH terbesar
         val lines = masterBody.lines()
         var bestUrl: String? = null
         var bestBw = -1
@@ -150,38 +146,36 @@ open class EmturbovidExtractor : ExtractorApi() {
     }
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        
         val upstreamRef = (referer ?: "$mainUrl/").trim()
+        val results = mutableListOf<ExtractorLink>()
 
         val resolved = resolveRedirect(url, upstreamRef)
 
-        val html = if (resolved.contains(".m3u8", true)) "" else fetchText(resolved, upstreamRef)
+        val html = runCatching {
+            if (resolved.contains(".m3u8", true)) "" else fetchText(resolved, upstreamRef)
+        }.getOrDefault("")
 
         val wrapperM3u8 = (if (resolved.contains(".m3u8", true)) resolved else findFirstM3u8(html))
-            ?.let { httpsify(it) } ?: return null
+            ?.let { httpsify(it) }
+            ?: return null
 
-        val wrapperRef = hostSlash(wrapperM3u8)
-        val wrapperBody = fetchText(wrapperM3u8, wrapperRef)
+        val wrapperRef = hostBase(wrapperM3u8).trimEnd('/') + "/"
+
+        val wrapperBody = runCatching { fetchText(wrapperM3u8, wrapperRef) }.getOrDefault("")
 
         val masterUrl = (findMasterInWrapper(wrapperBody) ?: wrapperM3u8).let { httpsify(it) }
-        val masterRef = wrapperRef
 
-        val masterBody = fetchText(masterUrl, masterRef)
-        if (!masterBody.trimStart().startsWith("#EXTM3U")) return null
-
-        val variantRel = pickBestVariant(masterBody) ?: return null
-        val variantUrl = httpsify(absUrl(hostSlash(masterUrl), variantRel))
-
-        val origin = hostBase(variantUrl)
-
-        return listOf(
-            newExtractorLink(
+        
+        fun makeLink(playUrl: String): ExtractorLink {
+            val origin = hostBase(playUrl)
+            return newExtractorLink(
                 source = name,
                 name = name,
-                url = variantUrl,
+                url = playUrl,
                 type = ExtractorLinkType.M3U8
             ) {
                 this.quality = Qualities.Unknown.value
+           
                 this.referer = upstreamRef
                 this.headers = mapOf(
                     "Referer" to upstreamRef,
@@ -190,7 +184,27 @@ open class EmturbovidExtractor : ExtractorApi() {
                     "Accept" to "*/*"
                 )
             }
-        )
+        }
+
+     
+        results.add(makeLink(masterUrl))
+
+       
+        val masterBody = runCatching { fetchText(masterUrl, wrapperRef) }.getOrDefault("")
+        val variantLine = pickBestVariant(masterBody)
+        if (!variantLine.isNullOrBlank()) {
+            val variantUrl = httpsify(
+                if (variantLine.startsWith("http", true)) variantLine else baseDir(masterUrl) + variantLine.trimStart('/')
+            )
+            results.add(makeLink(variantUrl))
+        }
+
+
+        if (masterUrl != wrapperM3u8) {
+            results.add(makeLink(wrapperM3u8))
+        }
+
+        return results.distinctBy { it.url }
     }
 }
 
