@@ -12,6 +12,7 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.extractors.Filesim
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import com.lagradost.cloudstream3.utils.httpsify
 import org.jsoup.Jsoup
 import java.net.URI
 import java.util.Collections
@@ -36,7 +37,6 @@ open class Kotakajaib : ExtractorApi() {
     ) {
         val document = app.get(url, referer = referer).document
 
-        // Embed servers (data-frame)
         val links = document.select("ul#dropdown-server li a")
         for (a in links) {
             loadExtractor(
@@ -115,7 +115,6 @@ open class EmturbovidExtractor : ExtractorApi() {
             )
             val body = resp.text
 
-         
             val inside = Regex("""https?://[^\s#]+/master\.m3u8[^\s#]*""").find(body)?.value
             httpsify(inside ?: m3u8Url)
         } catch (_: Exception) {
