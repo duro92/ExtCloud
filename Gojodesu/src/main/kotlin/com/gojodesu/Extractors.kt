@@ -49,12 +49,6 @@ open class Kotakajaib : ExtractorApi() {
     }
 }
 
-package com.lagradost.cloudstream3.extractors
-
-import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.utils.*
-import java.net.URI
-
 open class EmturbovidExtractor : ExtractorApi() {
 
     override var name = "Emturbovid"
