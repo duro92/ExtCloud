@@ -50,7 +50,6 @@ open class Kotakajaib : ExtractorApi() {
 }
 
 open class EmturbovidExtractor : ExtractorApi() {
-
     override var name = "Emturbovid"
     override var mainUrl = "https://emturbovid.com"
     override val requiresReferer = true
@@ -65,6 +64,24 @@ open class EmturbovidExtractor : ExtractorApi() {
     }
 
     private fun hostSlash(url: String): String = hostBase(url).trimEnd('/') + "/"
+
+    private fun absUrl(base: String, u: String): String {
+        val x = u.trim()
+        if (x.startsWith("http", true)) return x
+        return base.trimEnd('/') + "/" + x.trimStart('/')
+    }
+
+    private suspend fun fetchText(url: String, referer: String): String {
+        return app.get(
+            url,
+            referer = referer,
+            allowRedirects = true,
+            headers = mapOf(
+                "User-Agent" to UA,
+                "Accept" to "*/*"
+            )
+        ).text
+    }
 
     private suspend fun resolveRedirect(url: String, referer: String): String {
         var current = httpsify(url)
@@ -100,86 +117,75 @@ open class EmturbovidExtractor : ExtractorApi() {
         return current
     }
 
-    private suspend fun fetchText(url: String, referer: String): String {
-        return app.get(
-            url,
-            referer = referer,
-            allowRedirects = true,
-            headers = mapOf(
-                "User-Agent" to UA,
-                "Accept" to "*/*"
-            )
-        ).text
-    }
-
-    private fun isM3u8(text: String): Boolean =
-        text.trimStart().startsWith("#EXTM3U")
-
     private fun findFirstM3u8(text: String): String? =
         Regex("""https?://[^\s"'<>]+\.m3u8[^\s"'<>]*""").find(text)?.value
 
     private fun findMasterInWrapper(wrapperBody: String): String? =
         Regex("""https?://[^\s#]+/master\.m3u8[^\s#]*""").find(wrapperBody)?.value
 
+    private fun pickBestVariant(masterBody: String): String? {
+        // Ambil variant dengan BANDWIDTH terbesar
+        val lines = masterBody.lines()
+        var bestUrl: String? = null
+        var bestBw = -1
+
+        var i = 0
+        while (i < lines.size) {
+            val line = lines[i].trim()
+            if (line.startsWith("#EXT-X-STREAM-INF", true)) {
+                val bw = Regex("""BANDWIDTH=(\d+)""").find(line)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+                val next = lines.getOrNull(i + 1)?.trim()
+                if (!next.isNullOrBlank() && !next.startsWith("#")) {
+                    if (bw > bestBw) {
+                        bestBw = bw
+                        bestUrl = next
+                    }
+                }
+                i += 2
+                continue
+            }
+            i++
+        }
+        return bestUrl
+    }
+
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val pageReferer = referer ?: "$mainUrl/"
+        
+        val upstreamRef = (referer ?: "$mainUrl/").trim()
 
-        val resolved = resolveRedirect(url, pageReferer)
+        val resolved = resolveRedirect(url, upstreamRef)
 
-        val resolvedHtml = if (resolved.contains(".m3u8", true)) "" else fetchText(resolved, pageReferer)
+        val html = if (resolved.contains(".m3u8", true)) "" else fetchText(resolved, upstreamRef)
 
-        val wrapperM3u8 = (if (resolved.contains(".m3u8", true)) resolved else findFirstM3u8(resolvedHtml))
-            ?.let { httpsify(it) }
-            ?: return null
+        val wrapperM3u8 = (if (resolved.contains(".m3u8", true)) resolved else findFirstM3u8(html))
+            ?.let { httpsify(it) } ?: return null
 
         val wrapperRef = hostSlash(wrapperM3u8)
         val wrapperBody = fetchText(wrapperM3u8, wrapperRef)
 
-        if (!isM3u8(wrapperBody)) {
-            return null
-        }
+        val masterUrl = (findMasterInWrapper(wrapperBody) ?: wrapperM3u8).let { httpsify(it) }
+        val masterRef = wrapperRef
 
-        val masterCandidate = (findMasterInWrapper(wrapperBody) ?: wrapperM3u8).let { httpsify(it) }
+        val masterBody = fetchText(masterUrl, masterRef)
+        if (!masterBody.trimStart().startsWith("#EXTM3U")) return null
 
-        val masterRefCandidates = listOf(
-            wrapperRef,
-            hostSlash(masterCandidate),
-            pageReferer,
-            "$mainUrl/"
-        )
+        val variantRel = pickBestVariant(masterBody) ?: return null
+        val variantUrl = httpsify(absUrl(hostSlash(masterUrl), variantRel))
 
-        var finalUrl: String? = null
-        var finalRef: String? = null
-
-        for (refTry in masterRefCandidates) {
-            val body = runCatching { fetchText(masterCandidate, refTry) }.getOrNull() ?: continue
-            if (isM3u8(body)) {
-                finalUrl = masterCandidate
-                finalRef = refTry
-                break
-            }
-        }
-
-        if (finalUrl == null) {
-            finalUrl = wrapperM3u8
-            finalRef = wrapperRef
-        }
-
-        val finalHost = hostBase(finalUrl!!)
-        val outRef = finalRef ?: "$finalHost/"
+        val origin = hostBase(variantUrl)
 
         return listOf(
             newExtractorLink(
                 source = name,
                 name = name,
-                url = finalUrl!!,
+                url = variantUrl,
                 type = ExtractorLinkType.M3U8
             ) {
                 this.quality = Qualities.Unknown.value
-                this.referer = outRef
+                this.referer = upstreamRef
                 this.headers = mapOf(
-                    "Referer" to outRef,
-                    "Origin" to hostBase(finalUrl!!),
+                    "Referer" to upstreamRef,
+                    "Origin" to origin,
                     "User-Agent" to UA,
                     "Accept" to "*/*"
                 )
