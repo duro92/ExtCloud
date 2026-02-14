@@ -55,21 +55,31 @@ open class EmturbovidExtractor : ExtractorApi() {
     override var mainUrl = "https://emturbovid.com"
     override val requiresReferer = true
 
-    private fun hostBase(u: String): String =
-        URI(u).let { "${it.scheme}://${it.host}" }
+    private val UA =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
-    private fun hostSlash(u: String): String =
-        hostBase(u) + "/"
+    private fun hostBase(url: String): String {
+        val u = httpsify(url)
+        val m = Regex("""^(https?://[^/]+)""", RegexOption.IGNORE_CASE).find(u)
+        return m?.groupValues?.get(1) ?: mainUrl
+    }
+
+    private fun hostSlash(url: String): String = hostBase(url).trimEnd('/') + "/"
 
     private suspend fun resolveRedirect(url: String, referer: String): String {
-        var current = url
+        var current = httpsify(url)
         var ref = referer
 
         repeat(6) {
-            val resp = app.get(current, referer = ref, allowRedirects = true)
+            val resp = app.get(
+                current,
+                referer = ref,
+                allowRedirects = true,
+                headers = mapOf("User-Agent" to UA)
+            )
             val html = resp.text
 
-            if (current.contains(".m3u8", true)) return current
+            if (current.contains(".m3u8", true) || current.contains(".mp4", true)) return current
 
             val meta = Regex(
                 """http-equiv\s*=\s*["']refresh["'][^>]*url\s*=\s*'?([^"' >]+)""",
@@ -81,7 +91,7 @@ open class EmturbovidExtractor : ExtractorApi() {
                 RegexOption.IGNORE_CASE
             ).find(html)?.groupValues?.getOrNull(1)
 
-            val next = meta ?: link ?: return current
+            val next = (meta ?: link)?.trim() ?: return current
 
             ref = current
             current = httpsify(next)
@@ -90,54 +100,88 @@ open class EmturbovidExtractor : ExtractorApi() {
         return current
     }
 
-    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+    private suspend fun fetchText(url: String, referer: String): String {
+        return app.get(
+            url,
+            referer = referer,
+            allowRedirects = true,
+            headers = mapOf(
+                "User-Agent" to UA,
+                "Accept" to "*/*"
+            )
+        ).text
+    }
 
+    private fun isM3u8(text: String): Boolean =
+        text.trimStart().startsWith("#EXTM3U")
+
+    private fun findFirstM3u8(text: String): String? =
+        Regex("""https?://[^\s"'<>]+\.m3u8[^\s"'<>]*""").find(text)?.value
+
+    private fun findMasterInWrapper(wrapperBody: String): String? =
+        Regex("""https?://[^\s#]+/master\.m3u8[^\s#]*""").find(wrapperBody)?.value
+
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val pageReferer = referer ?: "$mainUrl/"
 
         val resolved = resolveRedirect(url, pageReferer)
 
-        val firstResp = app.get(resolved, referer = pageReferer, allowRedirects = true)
-        val html = firstResp.text
+        val resolvedHtml = if (resolved.contains(".m3u8", true)) "" else fetchText(resolved, pageReferer)
 
-        val wrapperM3u8 = if (resolved.contains(".m3u8", true)) {
-            resolved
-        } else {
-            Regex("""https?://[^\s"'<>]+\.m3u8[^\s"'<>]*""")
-                .find(html)
-                ?.value
-                ?: return null
-        }
+        val wrapperM3u8 = (if (resolved.contains(".m3u8", true)) resolved else findFirstM3u8(resolvedHtml))
+            ?.let { httpsify(it) }
+            ?: return null
 
         val wrapperRef = hostSlash(wrapperM3u8)
+        val wrapperBody = fetchText(wrapperM3u8, wrapperRef)
 
-        val wrapperResp = app.get(
-            wrapperM3u8,
-            referer = wrapperRef,
-            allowRedirects = true
+        if (!isM3u8(wrapperBody)) {
+            return null
+        }
+
+        val masterCandidate = (findMasterInWrapper(wrapperBody) ?: wrapperM3u8).let { httpsify(it) }
+
+        val masterRefCandidates = listOf(
+            wrapperRef,
+            hostSlash(masterCandidate),
+            pageReferer,
+            "$mainUrl/"
         )
 
-        val wrapperBody = wrapperResp.text
+        var finalUrl: String? = null
+        var finalRef: String? = null
 
-        val masterM3u8 = Regex("""https?://[^\s#]+/master\.m3u8[^\s#]*""")
-            .find(wrapperBody)
-            ?.value
-            ?: wrapperM3u8
+        for (refTry in masterRefCandidates) {
+            val body = runCatching { fetchText(masterCandidate, refTry) }.getOrNull() ?: continue
+            if (isM3u8(body)) {
+                finalUrl = masterCandidate
+                finalRef = refTry
+                break
+            }
+        }
 
-        val finalUrl = httpsify(masterM3u8)
-        val finalHost = hostBase(finalUrl)
+        if (finalUrl == null) {
+            finalUrl = wrapperM3u8
+            finalRef = wrapperRef
+        }
+
+        val finalHost = hostBase(finalUrl!!)
+        val outRef = finalRef ?: "$finalHost/"
 
         return listOf(
             newExtractorLink(
                 source = name,
                 name = name,
-                url = finalUrl,
+                url = finalUrl!!,
                 type = ExtractorLinkType.M3U8
             ) {
                 this.quality = Qualities.Unknown.value
-                this.referer = "$finalHost/"
+                this.referer = outRef
                 this.headers = mapOf(
-                    "Referer" to "$finalHost/",
-                    "Origin" to finalHost
+                    "Referer" to outRef,
+                    "Origin" to hostBase(finalUrl!!),
+                    "User-Agent" to UA,
+                    "Accept" to "*/*"
                 )
             }
         )
