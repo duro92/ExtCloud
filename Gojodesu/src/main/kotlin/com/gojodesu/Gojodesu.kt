@@ -213,7 +213,7 @@ class Gojodesu : MainAPI() {
         }
     }
 
-   override suspend fun loadLinks(
+override suspend fun loadLinks(
     data: String,
     isCasting: Boolean,
     subtitleCallback: (SubtitleFile) -> Unit,
@@ -221,18 +221,16 @@ class Gojodesu : MainAPI() {
 ): Boolean {
     val doc = app.get(data).document
 
-    fun refererOf(embedUrl: String): String {
-        return runCatching { getBaseUrl(embedUrl) }.getOrDefault(mainUrl).trimEnd('/') + "/"
-    }
+    fun refererOf(embedUrl: String): String =
+        getBaseUrl(embedUrl).trimEnd('/') + "/"
 
     fun pickIframeSrc(d: org.jsoup.nodes.Document): String? {
-        val iframeEl = d.selectFirst("div.player-embed iframe, div.gmr-embed-responsive iframe, div.movieplay iframe, iframe")
+        val iframeEl = d.selectFirst("div.player-embed iframe, iframe")
         return listOf("src", "data-src", "data-litespeed-src")
             .firstNotNullOfOrNull { k -> iframeEl?.attr(k)?.takeIf { it.isNotBlank() } }
             ?.let { httpsify(it) }
     }
 
- 
     pickIframeSrc(doc)?.let { embed ->
         loadExtractor(embed, refererOf(embed), subtitleCallback, callback)
     }
@@ -250,17 +248,14 @@ class Gojodesu : MainAPI() {
         }
     }
 
-    doc.select("div.dlbox a[href], a:contains(Download), a:contains(download)")
-        .map { it.attr("href").trim() }
-        .filter { it.isNotBlank() }
-        .forEach { link ->
-            val fixed = fixUrl(link)
-            loadExtractor(fixed, mainUrl, subtitleCallback, callback)
-        }
-
     return true
 }
 
+    private fun getBaseUrl(url: String): String {
+            val u = httpsify(url)
+            val m = Regex("""^(https?://[^/]+)""", RegexOption.IGNORE_CASE).find(u)
+            return m?.groupValues?.get(1) ?: mainUrl
+    }
 
     private fun Element.getImageAttr(): String {
         return when {
