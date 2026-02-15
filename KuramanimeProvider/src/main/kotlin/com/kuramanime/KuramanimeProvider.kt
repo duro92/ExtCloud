@@ -20,7 +20,7 @@ class KuramanimeProvider : MainAPI() {
     override var lang = "id"
     override var sequentialMainPage = true
     override val hasDownloadSupport = true
-    var authorization : String? = "cNekxETok4vvcb5wogyYGSZNsbeYOsORYQB"
+    var authorization : String? = "LhwMkOuhWSF1u2v56XbVpLgkh1lxe7tYW97AeK"
     override val supportedTypes = setOf(
         TvType.Anime,
         TvType.AnimeMovie,
