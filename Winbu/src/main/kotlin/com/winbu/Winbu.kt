@@ -171,14 +171,20 @@ class Winbu : MainAPI() {
         val document = app.get(data).document
         var found = false
         val seen = hashSetOf<String>()
+        val subtitleCb: (SubtitleFile) -> Unit = { subtitleCallback.invoke(it) }
+        val linkCb: (ExtractorLink) -> Unit = {
+            found = true
+            callback.invoke(it)
+        }
 
         suspend fun loadUrl(url: String?) {
             val raw = url?.trim().orEmpty()
             if (raw.isBlank()) return
             val fixed = httpsify(raw)
             if (!seen.add(fixed)) return
-            found = true
-            loadExtractor(fixed, data, subtitleCallback, callback)
+            runCatching {
+                loadExtractor(fixed, data, subtitleCb, linkCb)
+            }
         }
 
         suspend fun addDirect(url: String?, sourceName: String, quality: String? = null) {
@@ -186,8 +192,7 @@ class Winbu : MainAPI() {
             if (raw.isBlank()) return
             val fixed = fixUrl(raw)
             if (!seen.add(fixed)) return
-            found = true
-            callback(
+            linkCb(
                 newExtractorLink(sourceName, sourceName, fixed, INFER_TYPE) {
                     this.quality = quality?.let { getQualityFromName(it) } ?: Qualities.Unknown.value
                     this.headers = mapOf("Referer" to data)
@@ -195,10 +200,12 @@ class Winbu : MainAPI() {
             )
         }
 
+        // 1) Embed bawaan halaman episode/film
         for (frame in document.select(".movieplay .pframe iframe, .player-embed iframe, .movieplay iframe, #embed_holder iframe")) {
             loadUrl(frame.getIframeAttr())
         }
 
+        // 2) Server list dinamis (dropdown server)
         val ajaxUrl = "$mainUrl/wp-admin/admin-ajax.php"
         for (option in document.select(".east_player_option[data-post][data-nume][data-type]")) {
             val post = option.attr("data-post").trim()
@@ -236,6 +243,7 @@ class Winbu : MainAPI() {
             }
         }
 
+        // 3) Link download (fallback jika server list tidak menghasilkan link playable)
         for (a in document.select(".download-eps a[href], #downloadb a[href], .boxdownload a[href], .dlbox a[href]")) {
             loadUrl(a.attr("href"))
         }
