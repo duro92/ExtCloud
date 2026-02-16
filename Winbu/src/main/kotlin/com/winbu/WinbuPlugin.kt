@@ -8,6 +8,17 @@ import android.content.Context
 class WinbuPlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(Winbu())
+        registerExtractorAPI(Dingtezuni())
+        registerExtractorAPI(Movearnpre())
+        registerExtractorAPI(Vidhidepre())
+        registerExtractorAPI(Dhtpre())
+        registerExtractorAPI(Mivalyo())
+        registerExtractorAPI(Bingezove())
+        registerExtractorAPI(Hglink())
+        registerExtractorAPI(Gdriveplayerto())
+        registerExtractorAPI(Playerngefilm21())
         registerExtractorAPI(Winbustrp2p())
+        registerExtractorAPI(Xshotcok())
+        registerExtractorAPI(Dsvplay())
     }
 }

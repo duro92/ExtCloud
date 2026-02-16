@@ -191,6 +191,12 @@ class Winbu : MainAPI() {
             callback.invoke(it)
         }
 
+        suspend fun throwToExtractors(url: String, referer: String = data) {
+            runCatching {
+                loadExtractor(url, referer, subtitleCb, linkCb)
+            }
+        }
+
         suspend fun resolveFiledon(url: String): Pair<String?, String?> {
             val page = runCatching { app.get(url, referer = data).document }.getOrNull() ?: return null to null
             val json = page.selectFirst("#app")?.attr("data-page") ?: return null to null
@@ -217,6 +223,9 @@ class Winbu : MainAPI() {
             val fixed = httpsify(raw)
             if (!seen.add(fixed)) return
 
+            // Always send discovered links to extractor chain first.
+            throwToExtractors(fixed, data)
+
             if (fixed.contains("filedon.co/embed/", true)) {
                 val (direct, fileName) = resolveFiledon(fixed)
                 if (!direct.isNullOrBlank()) {
@@ -229,9 +238,8 @@ class Winbu : MainAPI() {
                 }
             }
 
-            runCatching {
-                loadExtractor(fixed, data, subtitleCb, linkCb)
-            }
+            // Some links only resolve with main domain as referer.
+            throwToExtractors(fixed, "$mainUrl/")
         }
 
         // 1) Embed bawaan halaman episode/film
