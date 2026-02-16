@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.base64Decode
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.httpsify
 import com.lagradost.cloudstream3.utils.loadExtractor
@@ -22,6 +23,19 @@ class Winbu : MainAPI() {
     override val hasQuickSearch = true
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Movie, TvType.Anime, TvType.TvSeries)
+
+    data class FiledonPage(
+        val props: FiledonProps? = null,
+    )
+
+    data class FiledonProps(
+        val url: String? = null,
+        val files: FiledonFile? = null,
+    )
+
+    data class FiledonFile(
+        val name: String? = null,
+    )
 
     override val mainPage = mainPageOf(
         "$mainUrl/film/" to "Film Terbaru",
@@ -177,14 +191,11 @@ class Winbu : MainAPI() {
             callback.invoke(it)
         }
 
-        suspend fun loadUrl(url: String?) {
-            val raw = url?.trim().orEmpty()
-            if (raw.isBlank()) return
-            val fixed = httpsify(raw)
-            if (!seen.add(fixed)) return
-            runCatching {
-                loadExtractor(fixed, data, subtitleCb, linkCb)
-            }
+        suspend fun resolveFiledon(url: String): Pair<String?, String?> {
+            val page = runCatching { app.get(url, referer = data).document }.getOrNull() ?: return null to null
+            val json = page.selectFirst("#app")?.attr("data-page") ?: return null to null
+            val parsed = tryParseJson<FiledonPage>(json) ?: return null to null
+            return parsed.props?.url to parsed.props?.files?.name
         }
 
         suspend fun addDirect(url: String?, sourceName: String, quality: String? = null) {
@@ -198,6 +209,29 @@ class Winbu : MainAPI() {
                     this.headers = mapOf("Referer" to data)
                 }
             )
+        }
+
+        suspend fun loadUrl(url: String?) {
+            val raw = url?.trim().orEmpty()
+            if (raw.isBlank()) return
+            val fixed = httpsify(raw)
+            if (!seen.add(fixed)) return
+
+            if (fixed.contains("filedon.co/embed/", true)) {
+                val (direct, fileName) = resolveFiledon(fixed)
+                if (!direct.isNullOrBlank()) {
+                    addDirect(
+                        url = direct,
+                        sourceName = "$name Filedon",
+                        quality = fileName
+                    )
+                    return
+                }
+            }
+
+            runCatching {
+                loadExtractor(fixed, data, subtitleCb, linkCb)
+            }
         }
 
         // 1) Embed bawaan halaman episode/film
