@@ -158,7 +158,7 @@ class Winbu : MainAPI() {
         val isSeries = episodes.isNotEmpty() && !url.contains("/film/", true)
 
         return if (isSeries) {
-            newTvSeriesLoadResponse(title, url, TvType.Anime, episodes) {
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.plot = description
                 this.tags = tags
