@@ -1,5 +1,8 @@
 ## Buat ngopi : 
-https://saweria.co/duro92
+https://saweria.co/duro92
+
+## Link Install :
+
 
 ## Thanks To :
 
