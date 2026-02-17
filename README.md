@@ -2,7 +2,7 @@
 https://saweria.co/duro92
 
 ## Link Install :
-https://raw.githubusercontent.com/duro92/ExtCloud/builds/repo.json
+https://raw.githubusercontent.com/duro92/ExtCloud/master/repo.json
 
 ## Thanks To :
 1.  Tekuma25 : https://github.com/TeKuma25/IndoStream
