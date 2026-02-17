@@ -2,10 +2,9 @@
 https://saweria.co/duro92
 
 ## Link Install :
+https://raw.githubusercontent.com/duro92/ExtCloud/main/repo.json
 
-
-## Thanks To :
-
+## Thanks To :
 1.  Tekuma25 : https://github.com/TeKuma25/IndoStream
 2.  Hexated
 3.  CSX : https://github.com/SaurabhKaperwan/CSX
