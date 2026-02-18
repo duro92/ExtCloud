@@ -186,7 +186,11 @@ open class Kotakajaib : ExtractorApi() {
                 location.startsWith("//") -> "https:$location"
                 else -> "$mainUrl/${location.trimStart('/')}"
             }
-            emitOrExtract(target, referer, quality, subtitleCallback, callback)
+
+            // Some mirrors redirect to intermediate pages. We only follow if the response itself
+            // provides a direct target URL (e.g. meta-refresh or a plain link), without solving challenges.
+            val maybeResolved = resolveRedirectPageIfDirect(target, mirrorUrl)
+            emitOrExtract(maybeResolved ?: target, referer, quality, subtitleCallback, callback)
             return
         }
 
@@ -194,10 +198,47 @@ open class Kotakajaib : ExtractorApi() {
             response.document.select("a[href], iframe[src], source[src]").forEach { el ->
                 val target = if (el.tagName() == "a") el.attr("href") else el.attr("src")
                 if (target.isNotBlank()) {
-                    emitOrExtract(target, referer, quality, subtitleCallback, callback)
+                    val maybeResolved = resolveRedirectPageIfDirect(target, mirrorUrl)
+                    emitOrExtract(maybeResolved ?: target, referer, quality, subtitleCallback, callback)
                 }
             }
         }
+    }
+
+    private suspend fun resolveRedirectPageIfDirect(url: String, referer: String): String? {
+        // Only attempt for common intermediate links. If a page requires interaction, we bail out.
+        val host = runCatching { java.net.URI(url).host ?: "" }.getOrDefault("")
+        if (host.isBlank()) return null
+        val lowerHost = host.lowercase()
+        val mightBeIntermediate = lowerHost.contains("ouo.") || lowerHost.contains("ouo-") || lowerHost.contains("ouo")
+        if (!mightBeIntermediate) return null
+
+        val resp = runCatching { app.get(url, referer = referer, allowRedirects = false) }.getOrNull() ?: return null
+        val html = runCatching { resp.text }.getOrNull()?.trim().orEmpty()
+        if (html.isBlank()) return null
+
+        // If it looks like an interaction page, don't proceed.
+        if (html.contains("I'M A HUMAN", ignoreCase = true) ||
+            html.contains("I am human", ignoreCase = true) ||
+            html.contains("captcha", ignoreCase = true) ||
+            html.contains("g-recaptcha", ignoreCase = true)
+        ) return null
+
+        // meta refresh: <meta http-equiv="refresh" content="1;url=https://...">
+        Regex("""http-equiv\s*=\s*["']refresh["'][^>]*content\s*=\s*["'][^"']*url\s*=\s*([^"'>\s]+)""", RegexOption.IGNORE_CASE)
+            .find(html)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.let { return it }
+
+        // plain link in body
+        Regex("""<a[^>]+href=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+            .find(html)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.let { return it }
+
+        return null
     }
 
     private suspend fun emitOrExtract(
@@ -214,6 +255,35 @@ open class Kotakajaib : ExtractorApi() {
         }
 
         var handled = false
+
+        // Pixeldrain pages are not always handled by loadExtractor in all builds.
+        // If we can map /u/{id} -> /api/file/{id}, emit it directly.
+        if (runCatching { java.net.URI(fixed).host?.lowercase() }.getOrNull() == "pixeldrain.com") {
+            val idFromPath = Regex("""/u/([A-Za-z0-9]+)""").find(fixed)?.groupValues?.getOrNull(1)
+            val id = idFromPath ?: runCatching {
+                val doc = app.get(fixed, referer = referer).document
+                doc.selectFirst("meta[property=og:video], meta[property=og:video:url], meta[property=og:video:secure_url]")
+                    ?.attr("content")
+                    ?.substringAfter("/api/file/")
+                    ?.substringBefore("?")
+                    ?.substringBefore("/")
+            }.getOrNull()
+            if (!id.isNullOrBlank()) {
+                handled = true
+                callback.invoke(
+                    newExtractorLink(
+                        source = "Pixeldrain",
+                        name = if (quality != null) "Pixeldrain ${quality}p" else "Pixeldrain",
+                        url = "https://pixeldrain.com/api/file/$id"
+                    ) {
+                        this.referer = "https://pixeldrain.com/"
+                        this.quality = quality ?: Qualities.Unknown.value
+                    }
+                )
+                return
+            }
+        }
+
         loadExtractor(fixed, referer, subtitleCallback) {
             handled = true
             callback(it)
@@ -239,4 +309,3 @@ class Emturbovid : EmturbovidExtractor() {
     override var name = "Emturbovid"
     override var mainUrl = "https://turbovidhls.com"
 }
-
