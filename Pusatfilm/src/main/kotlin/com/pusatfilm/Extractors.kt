@@ -41,7 +41,12 @@ open class Kotakajaib : ExtractorApi() {
             url.startsWith("http") -> url
             else -> "$mainUrl/${url.trimStart('/')}"
         }
-        val pageReferer = referer ?: "$mainUrl/"
+        // Some hosts (e.g. emturbovid) are sensitive to referer. When we are parsing an embed page,
+        // keep the embed URL as our referer baseline.
+        val pageReferer = when {
+            fixedUrl.contains("/embed/") -> fixedUrl
+            else -> referer ?: "$mainUrl/"
+        }
 
         when {
             fixedUrl.contains("/api/file/") && fixedUrl.contains("/download") -> {
@@ -130,6 +135,10 @@ open class Kotakajaib : ExtractorApi() {
                 target.startsWith("//") -> "https:$target"
                 else -> "$mainUrl/${target.trimStart('/')}"
             }
+            // Skip obvious non-video assets to avoid wasting extractor attempts.
+            if (Regex("""\.(css|js|png|jpg|jpeg|gif|svg|ico|webp|woff2?|ttf|otf|map)(\?|$)""", RegexOption.IGNORE_CASE)
+                    .containsMatchIn(normalized)
+            ) return
             if (!visited.add(normalized)) return
 
             if (normalized.contains("/api/file/") && normalized.contains("/download")) {
@@ -152,6 +161,16 @@ open class Kotakajaib : ExtractorApi() {
 
         document.select("ul#dropdown-server li a[data-frame], a[data-frame]").forEach { a ->
             parseTarget(runCatching { base64Decode(a.attr("data-frame")) }.getOrNull())
+        }
+
+        // /embed/{id} pages use buttons with base64 payloads (multi-server selector)
+        document.select("button.server-item[data-frame], button.server-item[data-url], button.server-item[data-src]").forEach { btn ->
+            val raw =
+                btn.attr("data-frame").takeIf { it.isNotBlank() }
+                    ?: btn.attr("data-url").takeIf { it.isNotBlank() }
+                    ?: btn.attr("data-src").takeIf { it.isNotBlank() }
+            val decoded = runCatching { base64Decode(raw ?: "") }.getOrNull()
+            parseTarget(decoded ?: raw)
         }
 
         document.select("a[href*='/api/file/'][href*='/download'], a[href*='/mirror/'], a[href*='/file/']").forEach { a ->
@@ -307,5 +326,5 @@ open class Kotakajaib : ExtractorApi() {
 
 class Emturbovid : EmturbovidExtractor() {
     override var name = "Emturbovid"
-    override var mainUrl = "https://turbovidhls.com"
+    override var mainUrl = "https://emturbovid.com"
 }

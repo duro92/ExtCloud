@@ -170,8 +170,9 @@ class Pusatfilm : MainAPI() {
             val fixed = runCatching { httpsify(fixUrl(cleaned)) }.getOrElse { return }
             if (!visited.add(fixed)) return
 
-            val refererBase = runCatching { "${getBaseUrl(fixed)}/" }.getOrDefault("$mainUrl/")
-            loadExtractor(fixed, refererBase, subtitleCallback) { link ->
+            // Use the current page as referer; many embed hosts expect this.
+            val pageReferer = data
+            loadExtractor(fixed, pageReferer, subtitleCallback) { link ->
                 found = true
                 callback(link)
             }
@@ -182,7 +183,7 @@ class Pusatfilm : MainAPI() {
                 if (fileId.isNotBlank()) {
                     val apiUrl = "$base/api/file/$fileId/download"
                     if (visited.add(apiUrl)) {
-                        loadExtractor(apiUrl, "$base/", subtitleCallback) { link ->
+                        loadExtractor(apiUrl, pageReferer, subtitleCallback) { link ->
                             found = true
                             callback(link)
                         }
