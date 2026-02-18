@@ -11,6 +11,7 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.extractors.Gdriveplayer
 
 private data class KotakajaibApiResponse(
     val result: KotakajaibResult? = null,
@@ -41,12 +42,9 @@ open class Kotakajaib : ExtractorApi() {
             url.startsWith("http") -> url
             else -> "$mainUrl/${url.trimStart('/')}"
         }
-        // Some hosts (e.g. emturbovid) are sensitive to referer. When we are parsing an embed page,
-        // keep the embed URL as our referer baseline.
-        val pageReferer = when {
-            fixedUrl.contains("/embed/") -> fixedUrl
-            else -> referer ?: "$mainUrl/"
-        }
+        // For /embed/ pages, downstream iframe loads typically use origin referer (kotakajaib.me),
+        // so keep referer stable to maximize compatibility.
+        val pageReferer = referer ?: "$mainUrl/"
 
         when {
             fixedUrl.contains("/api/file/") && fixedUrl.contains("/download") -> {
@@ -127,6 +125,8 @@ open class Kotakajaib : ExtractorApi() {
     ) {
         val document = runCatching { app.get(pageUrl, referer = referer).document }.getOrNull() ?: return
         val visited = linkedSetOf<String>()
+        // Many embeds (including gdriveplayer.to) validate referer. Use the kotakajaib embed page as referer.
+        val downstreamReferer = pageUrl
 
         suspend fun parseTarget(raw: String?, quality: Int? = null) {
             val target = raw?.trim()?.takeIf { it.isNotBlank() } ?: return
@@ -156,7 +156,7 @@ open class Kotakajaib : ExtractorApi() {
                 }
             }
 
-            emitOrExtract(normalized, referer, quality, subtitleCallback, callback)
+            emitOrExtract(normalized, downstreamReferer, quality, subtitleCallback, callback)
         }
 
         document.select("ul#dropdown-server li a[data-frame], a[data-frame]").forEach { a ->
@@ -327,4 +327,8 @@ open class Kotakajaib : ExtractorApi() {
 class Emturbovid : EmturbovidExtractor() {
     override var name = "Emturbovid"
     override var mainUrl = "https://emturbovid.com"
+}
+
+class Gdriveplayerto : Gdriveplayer() {
+    override val mainUrl: String = "https://gdriveplayer.to"
 }
