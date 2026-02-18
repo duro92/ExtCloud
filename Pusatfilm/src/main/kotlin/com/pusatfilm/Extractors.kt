@@ -7,11 +7,115 @@ import com.lagradost.cloudstream3.extractors.EmturbovidExtractor
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.getQualityFromName
+import com.lagradost.cloudstream3.utils.getAndUnpack
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
+
+private data class CryptoJsAesJson(
+    val ct: String? = null,
+    val s: String? = null, // hex salt
+    val iv: String? = null, // hex iv (not used in password mode)
+)
+
+private fun hexToBytes(hex: String): ByteArray {
+    val clean = hex.trim().removePrefix("0x")
+    require(clean.length % 2 == 0) { "Invalid hex length" }
+    val out = ByteArray(clean.length / 2)
+    var i = 0
+    while (i < clean.length) {
+        out[i / 2] = clean.substring(i, i + 2).toInt(16).toByte()
+        i += 2
+    }
+    return out
+}
+
+// OpenSSL EVP_BytesToKey with MD5 (CryptoJS password-based AES default).
+private fun evpBytesToKeyMd5(password: ByteArray, salt: ByteArray, keyLen: Int, ivLen: Int): Pair<ByteArray, ByteArray> {
+    val totalLen = keyLen + ivLen
+    val out = ByteArray(totalLen)
+    var offset = 0
+    var prev = ByteArray(0)
+    val md5 = MessageDigest.getInstance("MD5")
+    while (offset < totalLen) {
+        md5.reset()
+        if (prev.isNotEmpty()) md5.update(prev)
+        md5.update(password)
+        md5.update(salt)
+        prev = md5.digest()
+        val toCopy = minOf(prev.size, totalLen - offset)
+        System.arraycopy(prev, 0, out, offset, toCopy)
+        offset += toCopy
+    }
+    return out.copyOfRange(0, keyLen) to out.copyOfRange(keyLen, totalLen)
+}
+
+private fun cryptoJsPasswordDecrypt(payload: CryptoJsAesJson, password: String): String? {
+    val ctB64 = payload.ct?.trim().orEmpty()
+    val saltHex = payload.s?.trim().orEmpty()
+    if (ctB64.isBlank() || saltHex.isBlank()) return null
+
+    val cipherText = runCatching { java.util.Base64.getDecoder().decode(ctB64) }.getOrNull() ?: return null
+    val salt = runCatching { hexToBytes(saltHex) }.getOrNull() ?: return null
+    val (key, iv) = evpBytesToKeyMd5(password.toByteArray(StandardCharsets.UTF_8), salt, 32, 16)
+
+    val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+    cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
+    val plain = runCatching { cipher.doFinal(cipherText) }.getOrNull() ?: return null
+    return runCatching { String(plain, StandardCharsets.UTF_8) }.getOrNull()
+}
+
+private fun decodeFromCharCodePayload(payload: String): String {
+    val sb = StringBuilder()
+    Regex("""\d+""").findAll(payload).forEach { m ->
+        val code = m.value.toIntOrNull() ?: return@forEach
+        sb.append(code.toChar())
+    }
+    return sb.toString()
+}
+
+private fun extractPassFromFromCharCode(html: String): String? {
+    // The page often contains 1-2 huge fromCharCode payloads. Decode the longest ones first.
+    val payloads = Regex("""'([0-9A-Za-z]{200,})'""").findAll(html).map { it.groupValues[1] }.toList()
+        .sortedByDescending { it.length }
+
+    for (p in payloads) {
+        val decoded = decodeFromCharCodePayload(p)
+        val pass = Regex("""\bpass\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+            .find(decoded)?.groupValues?.getOrNull(1)
+        if (!pass.isNullOrBlank()) return pass
+    }
+    return null
+}
+
+private fun extractCryptoJsDataJsonFromPackedScripts(documentHtml: String): String? {
+    // Unpack each eval(p,a,c,k,e,d) script until we find: data = '{"ct":...}'
+    val scripts = Regex("""<script\b[^>]*>([\s\S]*?)</script>""", RegexOption.IGNORE_CASE)
+        .findAll(documentHtml)
+        .map { it.groupValues[1] }
+        .filter { it.contains("eval(function(p,a,c,k,e,d)") }
+        .toList()
+
+    for (s in scripts) {
+        val unpacked = runCatching { getAndUnpack(s) }.getOrNull() ?: continue
+        // data='{"ct":"...","iv":"...","s":"..."}'
+        val raw = Regex("""\bdata\s*=\s*['"]([^'"]+)['"]""", RegexOption.IGNORE_CASE)
+            .find(unpacked)?.groupValues?.getOrNull(1)
+            ?.takeIf { it.contains("ct") && it.contains("s") }
+            ?: continue
+
+        // The data string is frequently escaped like {\"ct\":\"...\"}
+        return raw.replace("\\\"", "\"").replace("\\\\", "\\")
+    }
+    return null
+}
 
 private data class KotakajaibApiResponse(
     val result: KotakajaibResult? = null,
@@ -69,6 +173,11 @@ open class Kotakajaib : ExtractorApi() {
     ): Boolean {
         val ref = baseOrigin(referer) ?: "https://kotakajaib.me/"
 
+        // gdriveplayer.to embed2.php builds playlist url via CryptoJS(AES) + JS packer.
+        if (embedUrl.contains("/embed2.php", ignoreCase = true)) {
+            return tryExtractGdriveplayerEmbed2(embedUrl, ref, qualityHint, callback)
+        }
+
         val html = runCatching { app.get(embedUrl, referer = ref).text }.getOrNull() ?: return false
         val playlistRaw = Regex(
             """(?i)(https?://[^\s"'<>]+/hlsplaylist\.php\?[^\s"'<>]+|/hlsplaylist\.php\?[^\s"'<>]+)"""
@@ -106,6 +215,87 @@ open class Kotakajaib : ExtractorApi() {
                     this.type = ExtractorLinkType.M3U8
                     this.quality = vQ
                     this.headers = mapOf("Range" to "bytes=0-")
+                }
+            )
+        }
+        return true
+    }
+
+    private suspend fun tryExtractGdriveplayerEmbed2(
+        embedUrl: String,
+        upstreamReferer: String,
+        qualityHint: Int?,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val resp = runCatching { app.get(embedUrl, referer = upstreamReferer) }.getOrNull() ?: return false
+        val html = runCatching { resp.text }.getOrNull()?.takeIf { it.isNotBlank() } ?: return false
+
+        val ids = Regex("""\bvar\s+ids\s*=\s*["']([0-9a-f]{16,64})["']""", RegexOption.IGNORE_CASE)
+            .find(html)?.groupValues?.getOrNull(1)
+        val cookieHeader = ids?.let { "newaccess=$it" }
+
+        val pass = extractPassFromFromCharCode(html) ?: return false
+        val dataJson = extractCryptoJsDataJsonFromPackedScripts(html) ?: return false
+        val payload = tryParseJson<CryptoJsAesJson>(dataJson) ?: return false
+        val decrypted = cryptoJsPasswordDecrypt(payload, pass) ?: return false
+
+        // The decrypted blob typically contains another packed eval(...) that holds the player setup.
+        val decryptedUnpacked = runCatching { getAndUnpack(decrypted) }.getOrNull() ?: decrypted
+        val playlistRaw = Regex(
+            """(?i)(https?://[^\s"'<>]+/hlsplaylist\.php\?[^\s"'<>]+|/hlsplaylist\.php\?[^\s"'<>]+|hlsplaylist\.php\?[^\s"'<>]+)"""
+        ).find(decryptedUnpacked)?.groupValues?.getOrNull(1) ?: return false
+
+        val origin = "https://gdriveplayer.to"
+        val playlistUrl = when {
+            playlistRaw.startsWith("http") -> playlistRaw
+            playlistRaw.startsWith("/") -> "$origin$playlistRaw"
+            else -> "$origin/$playlistRaw"
+        }
+
+        val master = runCatching {
+            app.get(
+                playlistUrl,
+                referer = embedUrl,
+                headers = cookieHeader?.let { mapOf("Cookie" to it) } ?: emptyMap(),
+            ).text
+        }.getOrNull() ?: return false
+
+        if (!master.trimStart().startsWith("#EXTM3U")) return false
+
+        val variants = parseGdriveVariants(master, playlistUrl)
+        if (variants.isEmpty()) {
+            callback.invoke(
+                newExtractorLink(
+                    source = "Gdriveplayer",
+                    name = "Gdriveplayer",
+                    url = playlistUrl
+                ) {
+                    this.referer = origin
+                    this.type = ExtractorLinkType.M3U8
+                    this.quality = qualityHint ?: Qualities.Unknown.value
+                    this.headers = buildMap {
+                        put("Range", "bytes=0-")
+                        cookieHeader?.let { put("Cookie", it) }
+                    }
+                }
+            )
+            return true
+        }
+
+        variants.distinctBy { it.second }.forEach { (vUrl, vQ) ->
+            callback.invoke(
+                newExtractorLink(
+                    source = "Gdriveplayer",
+                    name = "Gdriveplayer ${vQ}p",
+                    url = vUrl
+                ) {
+                    this.referer = origin
+                    this.type = ExtractorLinkType.M3U8
+                    this.quality = vQ
+                    this.headers = buildMap {
+                        put("Range", "bytes=0-")
+                        cookieHeader?.let { put("Cookie", it) }
+                    }
                 }
             )
         }
@@ -469,7 +659,79 @@ class Gdriveplayerto : ExtractorApi() {
         // gdriveplayer.to endpoints appear to accept kotakajaib.me as referer; use origin if possible.
         val ref = baseOrigin(referer ?: "") ?: "https://kotakajaib.me/"
 
-        val html = runCatching { app.get(url, referer = ref).text }.getOrNull() ?: return
+        val resp = runCatching { app.get(url, referer = ref) }.getOrNull() ?: return
+        val html = runCatching { resp.text }.getOrNull() ?: return
+
+        // Prefer embed2.php decrypt flow if present.
+        if (url.contains("/embed2.php", ignoreCase = true)) {
+            val ids = Regex("""\bvar\s+ids\s*=\s*["']([0-9a-f]{16,64})["']""", RegexOption.IGNORE_CASE)
+                .find(html)?.groupValues?.getOrNull(1)
+            val cookieHeader = ids?.let { "newaccess=$it" }
+
+            val pass = extractPassFromFromCharCode(html) ?: return
+            val dataJson = extractCryptoJsDataJsonFromPackedScripts(html) ?: return
+            val payload = tryParseJson<CryptoJsAesJson>(dataJson) ?: return
+            val decrypted = cryptoJsPasswordDecrypt(payload, pass) ?: return
+            val decryptedUnpacked = runCatching { getAndUnpack(decrypted) }.getOrNull() ?: decrypted
+
+            val playlistRaw = Regex(
+                """(?i)(https?://[^\s"'<>]+/hlsplaylist\.php\?[^\s"'<>]+|/hlsplaylist\.php\?[^\s"'<>]+|hlsplaylist\.php\?[^\s"'<>]+)"""
+            ).find(decryptedUnpacked)?.groupValues?.getOrNull(1) ?: return
+
+            val origin = "https://gdriveplayer.to"
+            val playlistUrl = when {
+                playlistRaw.startsWith("http") -> playlistRaw
+                playlistRaw.startsWith("/") -> "$origin$playlistRaw"
+                else -> "$origin/$playlistRaw"
+            }
+
+            val master = runCatching {
+                app.get(
+                    playlistUrl,
+                    referer = url,
+                    headers = cookieHeader?.let { mapOf("Cookie" to it) } ?: emptyMap(),
+                ).text
+            }.getOrNull() ?: return
+
+            if (!master.trimStart().startsWith("#EXTM3U")) return
+            val variants = parseVariants(master, playlistUrl)
+            if (variants.isEmpty()) {
+                callback.invoke(
+                    newExtractorLink(
+                        source = name,
+                        name = name,
+                        url = playlistUrl
+                    ) {
+                        this.referer = origin
+                        this.type = ExtractorLinkType.M3U8
+                        this.quality = Qualities.Unknown.value
+                        this.headers = buildMap {
+                            put("Range", "bytes=0-")
+                            cookieHeader?.let { put("Cookie", it) }
+                        }
+                    }
+                )
+                return
+            }
+            variants.distinctBy { it.quality }.forEach { v ->
+                callback.invoke(
+                    newExtractorLink(
+                        source = name,
+                        name = "${name} ${v.quality}p",
+                        url = v.url
+                    ) {
+                        this.referer = origin
+                        this.type = ExtractorLinkType.M3U8
+                        this.quality = v.quality
+                        this.headers = buildMap {
+                            put("Range", "bytes=0-")
+                            cookieHeader?.let { put("Cookie", it) }
+                        }
+                    }
+                )
+            }
+            return
+        }
 
         val playlistRaw = Regex(
             """(?i)(https?://[^\s"'<>]+/hlsplaylist\.php\?[^\s"'<>]+|/hlsplaylist\.php\?[^\s"'<>]+)"""
