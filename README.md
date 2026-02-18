@@ -8,7 +8,7 @@ CloudStream Indonesian Extensions Repository
 
 Klik tombol di bawah untuk langsung install di CloudStream (Android):
 
-[![Install on CloudStream](https://img.shields.io/badge/Install-CloudStream-blue?style=for-the-badge&logo=android)](cloudstreamrepo://https://raw.githubusercontent.com/duro92/ExtCloud/main/repo.json)
+[![Install on CloudStream](https://img.shields.io/badge/Install-CloudStream-blue?style=for-the-badge&logo=android)](https://cloudstream.cf/repo?url=https://raw.githubusercontent.com/duro92/ExtCloud/main/repo.json)
 
 Atau gunakan link manual berikut di CloudStream:
 
