@@ -31,6 +31,87 @@ open class Kotakajaib : ExtractorApi() {
     override val mainUrl = "https://kotakajaib.me"
     override val requiresReferer = true
 
+    private fun baseOrigin(url: String?): String? = runCatching {
+        if (url.isNullOrBlank()) return@runCatching null
+        val u = java.net.URI(url)
+        val scheme = u.scheme ?: return@runCatching null
+        val host = u.host ?: return@runCatching null
+        "$scheme://$host/"
+    }.getOrNull()
+
+    private fun parseGdriveVariants(master: String, baseUrl: String): List<Pair<String, Int>> {
+        val lines = master.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+        val out = ArrayList<Pair<String, Int>>()
+        for (i in lines.indices) {
+            val line = lines[i]
+            if (!line.startsWith("#EXT-X-STREAM-INF", ignoreCase = true)) continue
+            val next = lines.getOrNull(i + 1) ?: continue
+
+            val qFromName = Regex("""NAME\s*=\s*"(\d{3,4})p"""", RegexOption.IGNORE_CASE)
+                .find(line)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            val qFromRes = Regex("""RESOLUTION\s*=\s*\d+\s*x\s*(\d+)""", RegexOption.IGNORE_CASE)
+                .find(line)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            val qFromType = Regex("""[?&]type=(\d{3,4})""", RegexOption.IGNORE_CASE)
+                .find(next)?.groupValues?.getOrNull(1)?.toIntOrNull()
+
+            val quality = qFromName ?: qFromRes ?: qFromType ?: Qualities.Unknown.value
+            val abs = runCatching { java.net.URI(baseUrl).resolve(next).toString() }.getOrNull() ?: continue
+            out.add(abs to quality)
+        }
+        return out
+    }
+
+    private suspend fun tryExtractGdriveplayer(
+        embedUrl: String,
+        referer: String,
+        qualityHint: Int?,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val ref = baseOrigin(referer) ?: "https://kotakajaib.me/"
+
+        val html = runCatching { app.get(embedUrl, referer = ref).text }.getOrNull() ?: return false
+        val playlistRaw = Regex(
+            """(?i)(https?://[^\s"'<>]+/hlsplaylist\.php\?[^\s"'<>]+|/hlsplaylist\.php\?[^\s"'<>]+)"""
+        ).find(html)?.groupValues?.getOrNull(1) ?: return false
+
+        val playlistUrl = if (playlistRaw.startsWith("http")) playlistRaw else "$mainUrl$playlistRaw"
+        val master = runCatching { app.get(playlistUrl, referer = ref).text }.getOrNull() ?: return false
+        if (!master.trimStart().startsWith("#EXTM3U")) return false
+
+        val variants = parseGdriveVariants(master, playlistUrl)
+        if (variants.isEmpty()) {
+            callback.invoke(
+                newExtractorLink(
+                    source = "Gdriveplayer",
+                    name = "Gdriveplayer",
+                    url = playlistUrl
+                ) {
+                    this.referer = ref
+                    this.type = ExtractorLinkType.M3U8
+                    this.quality = qualityHint ?: Qualities.Unknown.value
+                    this.headers = mapOf("Range" to "bytes=0-")
+                }
+            )
+            return true
+        }
+
+        variants.distinctBy { it.second }.forEach { (vUrl, vQ) ->
+            callback.invoke(
+                newExtractorLink(
+                    source = "Gdriveplayer",
+                    name = "Gdriveplayer ${vQ}p",
+                    url = vUrl
+                ) {
+                    this.referer = ref
+                    this.type = ExtractorLinkType.M3U8
+                    this.quality = vQ
+                    this.headers = mapOf("Range" to "bytes=0-")
+                }
+            )
+        }
+        return true
+    }
+
     override suspend fun getUrl(
         url: String,
         referer: String?,
@@ -274,6 +355,12 @@ open class Kotakajaib : ExtractorApi() {
         }
 
         var handled = false
+
+        // gdriveplayer.to is often served in a way that breaks the upstream AES-based extractor.
+        // Handle the observed embed2.php -> hlsplaylist.php -> hlsnew2.php flow directly.
+        if (runCatching { java.net.URI(fixed).host?.lowercase() }.getOrNull() == "gdriveplayer.to") {
+            if (tryExtractGdriveplayer(fixed, referer, quality, callback)) return
+        }
 
         // Pixeldrain pages are not always handled by loadExtractor in all builds.
         // If we can map /u/{id} -> /api/file/{id}, emit it directly.
