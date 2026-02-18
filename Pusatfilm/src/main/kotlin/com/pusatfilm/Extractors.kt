@@ -11,7 +11,7 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.extractors.Gdriveplayer
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 
 private data class KotakajaibApiResponse(
     val result: KotakajaibResult? = null,
@@ -329,6 +329,105 @@ class Emturbovid : EmturbovidExtractor() {
     override var mainUrl = "https://emturbovid.com"
 }
 
-class Gdriveplayerto : Gdriveplayer() {
-    override val mainUrl: String = "https://gdriveplayer.to"
+/**
+ * gdriveplayer.to has multiple implementations floating around in Cloudstream.
+ * The upstream extractor in some versions expects packed+AES JS, but the current
+ * site flow we see in Pusatfilm/Kotakajaib uses:
+ * - embed2.php -> hlsplaylist.php -> hlsnew2.php (m3u8)
+ *
+ * This extractor implements that flow directly.
+ */
+class Gdriveplayerto : ExtractorApi() {
+    override val name = "Gdriveplayer"
+    override val mainUrl = "https://gdriveplayer.to"
+    override val requiresReferer = true
+
+    private data class Variant(val url: String, val quality: Int)
+
+    private fun baseOrigin(url: String): String? = runCatching {
+        val u = java.net.URI(url)
+        val scheme = u.scheme ?: return@runCatching null
+        val host = u.host ?: return@runCatching null
+        "$scheme://$host/"
+    }.getOrNull()
+
+    private fun parseVariants(master: String, baseUrl: String): List<Variant> {
+        val lines = master.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+        val out = ArrayList<Variant>()
+        for (i in lines.indices) {
+            val line = lines[i]
+            if (!line.startsWith("#EXT-X-STREAM-INF", ignoreCase = true)) continue
+            val next = lines.getOrNull(i + 1) ?: continue
+
+            val qFromName = Regex("""NAME\s*=\s*"(\d{3,4})p"""", RegexOption.IGNORE_CASE)
+                .find(line)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            val qFromRes = Regex("""RESOLUTION\s*=\s*\d+\s*x\s*(\d+)""", RegexOption.IGNORE_CASE)
+                .find(line)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            val qFromType = Regex("""[?&]type=(\d{3,4})""", RegexOption.IGNORE_CASE)
+                .find(next)?.groupValues?.getOrNull(1)?.toIntOrNull()
+
+            val quality = qFromName ?: qFromRes ?: qFromType ?: Qualities.Unknown.value
+            val abs = runCatching { java.net.URI(baseUrl).resolve(next).toString() }.getOrNull() ?: continue
+            out.add(Variant(abs, quality))
+        }
+        return out
+    }
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        // gdriveplayer.to endpoints appear to accept kotakajaib.me as referer; use origin if possible.
+        val ref = baseOrigin(referer ?: "") ?: "https://kotakajaib.me/"
+
+        val html = runCatching { app.get(url, referer = ref).text }.getOrNull() ?: return
+
+        val playlistRaw = Regex(
+            """(?i)(https?://[^\s"'<>]+/hlsplaylist\.php\?[^\s"'<>]+|/hlsplaylist\.php\?[^\s"'<>]+)"""
+        ).find(html)?.groupValues?.getOrNull(1)
+
+        val playlistUrl = when {
+            playlistRaw.isNullOrBlank() -> null
+            playlistRaw.startsWith("http") -> playlistRaw
+            else -> "$mainUrl${playlistRaw}"
+        } ?: return
+
+        val master = runCatching { app.get(playlistUrl, referer = ref).text }.getOrNull() ?: return
+        if (!master.trimStart().startsWith("#EXTM3U")) return
+
+        val variants = parseVariants(master, playlistUrl)
+        if (variants.isEmpty()) {
+            // Sometimes hlsplaylist.php may already be a single-variant m3u8
+            callback.invoke(
+                newExtractorLink(
+                    source = name,
+                    name = name,
+                    url = playlistUrl
+                ) {
+                    this.referer = ref
+                    this.type = ExtractorLinkType.M3U8
+                    this.quality = Qualities.Unknown.value
+                    this.headers = mapOf("Range" to "bytes=0-")
+                }
+            )
+            return
+        }
+
+        variants.distinctBy { it.quality }.forEach { v ->
+            callback.invoke(
+                newExtractorLink(
+                    source = name,
+                    name = "${name} ${v.quality}p",
+                    url = v.url
+                ) {
+                    this.referer = ref
+                    this.type = ExtractorLinkType.M3U8
+                    this.quality = v.quality
+                    this.headers = mapOf("Range" to "bytes=0-")
+                }
+            )
+        }
+    }
 }
