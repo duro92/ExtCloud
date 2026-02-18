@@ -7,7 +7,6 @@ import com.lagradost.cloudstream3.utils.httpsify
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import org.jsoup.nodes.Element
 import java.net.URI
 
@@ -20,6 +19,7 @@ class Pusatfilm : MainAPI() {
 
     override var name = "Pusatfilm🍖"
     override val hasMainPage = true
+    override val hasDownloadSupport = true
     override var lang = "id"
     override val supportedTypes =
         setOf(TvType.Movie, TvType.TvSeries, TvType.Anime, TvType.AsianDrama)
@@ -162,60 +162,52 @@ class Pusatfilm : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
-        val iframeEl = document.selectFirst("div.gmr-embed-responsive iframe, div.movieplay iframe, iframe")
-        val iframe = listOf("src", "data-src", "data-litespeed-src")
-            .firstNotNullOfOrNull { key -> iframeEl?.attr(key)?.takeIf { it.isNotBlank() } }
-            ?.let { httpsify(it) }
+        val visited = linkedSetOf<String>()
+        var found = false
 
-        if (!iframe.isNullOrBlank()) {
-            val refererBase = runCatching { getBaseUrl(iframe) }.getOrDefault(mainUrl) + "/"
-            loadExtractor(iframe, refererBase, subtitleCallback, callback)
-        }
+        suspend fun parseCandidate(rawUrl: String?) {
+            val cleaned = rawUrl?.trim()?.takeIf { it.isNotBlank() } ?: return
+            val fixed = runCatching { httpsify(fixUrl(cleaned)) }.getOrElse { return }
+            if (!visited.add(fixed)) return
 
-        // Download button links (contoh: kotakajaib.me/file/ID)
-        val downloadLinks = document.select(
-            "li.pull-right a[href], a:contains(Download), a:contains(download), span.textdownload"
-        ).mapNotNull { el ->
-            if (el.tagName() == "span") {
-                el.parent()?.attr("href")
-            } else {
-                el.attr("href")
+            val refererBase = runCatching { "${getBaseUrl(fixed)}/" }.getOrDefault("$mainUrl/")
+            loadExtractor(fixed, refererBase, subtitleCallback) { link ->
+                found = true
+                callback(link)
             }
-        }.mapNotNull { it.takeIf { link -> link.isNotBlank() } }
 
-        downloadLinks.forEach { link ->
-            val fixed = fixUrl(link)
-            // Coba langsung lewat extractor
-            loadExtractor(fixed, mainUrl, subtitleCallback, callback)
-
-            // Khusus kotakajaib: ambil API download untuk mirror
             if (fixed.contains("kotakajaib.me/file/")) {
-                val base = getBaseUrl(fixed)
+                val base = runCatching { getBaseUrl(fixed) }.getOrDefault("https://kotakajaib.me")
                 val fileId = fixed.substringAfter("/file/").substringBefore("?").substringBefore("/")
                 if (fileId.isNotBlank()) {
                     val apiUrl = "$base/api/file/$fileId/download"
-                    val apiResp = app.get(apiUrl, referer = base).text
-
-                    // Cari URL langsung di JSON (jika ada)
-                    Regex("https?://[^\"'\\s]+").findAll(apiResp).forEach { m ->
-                        val url = m.value
-                        loadExtractor(url, base, subtitleCallback, callback)
-                    }
-
-                    // Fallback: parse JSON untuk key yang mengandung url
-                    val parsed = runCatching { tryParseJson<Map<String, Any>>(apiResp) }.getOrNull()
-                    parsed?.let { map ->
-                        map.values.forEach { v ->
-                            val s = v?.toString() ?: return@forEach
-                            if (s.startsWith("http")) {
-                                loadExtractor(s, base, subtitleCallback, callback)
-                            }
+                    if (visited.add(apiUrl)) {
+                        loadExtractor(apiUrl, "$base/", subtitleCallback) { link ->
+                            found = true
+                            callback(link)
                         }
                     }
                 }
             }
         }
-        return true
+
+        val iframeLinks = document.select("div.gmr-embed-responsive iframe, div.movieplay iframe, iframe")
+            .mapNotNull { iframe ->
+                listOf("src", "data-src", "data-litespeed-src")
+                    .firstNotNullOfOrNull { key -> iframe.attr(key).takeIf { it.isNotBlank() } }
+            }
+
+        val downloadLinks = document.select(
+            "li.pull-right a[href], a[href*='kotakajaib.me/file/'], a[title*=Download], a:contains(Download), a:contains(download), span.textdownload"
+        ).mapNotNull { el ->
+            when (el.tagName()) {
+                "span" -> el.parent()?.attr("href")
+                else -> el.attr("href")
+            }?.takeIf { it.isNotBlank() }
+        }
+
+        (iframeLinks + downloadLinks).forEach { parseCandidate(it) }
+        return found
     }
 
     private fun Element.getImageAttr(): String {
