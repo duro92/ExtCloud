@@ -16,7 +16,7 @@ import java.net.URLEncoder
 class Midasxxi : MainAPI() {
     override var mainUrl = "https://ssstik.tv"
     private var directUrl = mainUrl
-    override var name = "MidasXXI"
+    override var name = "MidasXXI🙈"
     override val hasMainPage = true
     override var lang = "id"
     override val hasDownloadSupport = true
