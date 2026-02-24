@@ -607,10 +607,11 @@ open class EmturbovidExtractor : ExtractorApi() {
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val ref = referer ?: "$mainUrl/"
+
         val headers = mapOf(
             "Referer" to "$mainUrl/",
             "Origin" to mainUrl,
-            "User-Agent" to USER_AGENT,
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
             "Accept" to "*/*"
         )
 
@@ -627,24 +628,25 @@ open class EmturbovidExtractor : ExtractorApi() {
             .substringBefore("'")
             .trim()
 
+        // normalisasi URL
         if (masterUrl.startsWith("//")) masterUrl = "https:$masterUrl"
         if (masterUrl.startsWith("/")) masterUrl = mainUrl + masterUrl
 
-        // Fetch master playlist (level-1)
         val masterText = app.get(masterUrl, headers = headers).text
+        val lines = masterText.lines()
 
         val out = mutableListOf<ExtractorLink>()
 
-        // Parse variant: ambil RESOLUTION height, lalu URL di baris berikutnya
-        val lines = masterText.lines()
         for (i in 0 until lines.size) {
             val line = lines[i].trim()
             if (!line.startsWith("#EXT-X-STREAM-INF")) continue
 
-            val res = Regex("RESOLUTION=\\d+x(\\d+)").find(line)?.groupValues?.getOrNull(1)
-            val height = res?.toIntOrNull()
+            val height = Regex("RESOLUTION=\\d+x(\\d+)")
+                .find(line)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toIntOrNull()
 
-            // URL variant biasanya di baris berikutnya
             val next = lines.getOrNull(i + 1)?.trim().orEmpty()
             if (next.isBlank() || next.startsWith("#")) continue
 
@@ -652,15 +654,9 @@ open class EmturbovidExtractor : ExtractorApi() {
             if (variantUrl.startsWith("//")) variantUrl = "https:$variantUrl"
             else if (variantUrl.startsWith("/")) variantUrl = mainUrl + variantUrl
 
-            val q = when (height) {
-                2160 -> Qualities.UHD.value
-                1440 -> Qualities.QHD.value
-                1080 -> Qualities.FHD.value
-                720  -> Qualities.HD.value
-                480  -> Qualities.SD.value
-                360  -> Qualities.Low.value
-                else -> height ?: Qualities.Unknown.value
-            }
+            // Jangan pakai Qualities.UHD/QHD/FHD/HD/SD/Low (tidak ada)
+            // Paling kompatibel: pakai angka height langsung
+            val q = height ?: Qualities.Unknown.value
 
             out += newExtractorLink(
                 source = name,
@@ -674,9 +670,14 @@ open class EmturbovidExtractor : ExtractorApi() {
             }
         }
 
-        // Fallback kalau parsing gagal: balikin master aja
+        // fallback kalau parsing gagal
         if (out.isEmpty()) {
-            out += newExtractorLink(name, name, masterUrl, ExtractorLinkType.M3U8) {
+            out += newExtractorLink(
+                source = name,
+                name = name,
+                url = masterUrl,
+                type = ExtractorLinkType.M3U8
+            ) {
                 this.referer = "$mainUrl/"
                 this.headers = headers
                 this.quality = Qualities.Unknown.value
