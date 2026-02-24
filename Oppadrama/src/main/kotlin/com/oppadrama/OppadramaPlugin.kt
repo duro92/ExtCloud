@@ -11,7 +11,7 @@ class OppadramaPlugin : Plugin() {
         Oppadrama.context = context
         registerMainAPI(Oppadrama())
         registerExtractorAPI(Smoothpre())
-        registerExtractorAPI(Emturbovid())
+        registerExtractorAPI(EmturbovidExtractor())
         registerExtractorAPI(BuzzServer())
     }
 }

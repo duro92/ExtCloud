@@ -628,7 +628,6 @@ open class EmturbovidExtractor : ExtractorApi() {
             .substringBefore("'")
             .trim()
 
-        // normalisasi URL
         if (masterUrl.startsWith("//")) masterUrl = "https:$masterUrl"
         if (masterUrl.startsWith("/")) masterUrl = mainUrl + masterUrl
 
@@ -654,13 +653,11 @@ open class EmturbovidExtractor : ExtractorApi() {
             if (variantUrl.startsWith("//")) variantUrl = "https:$variantUrl"
             else if (variantUrl.startsWith("/")) variantUrl = mainUrl + variantUrl
 
-            // Jangan pakai Qualities.UHD/QHD/FHD/HD/SD/Low (tidak ada)
-            // Paling kompatibel: pakai angka height langsung
             val q = height ?: Qualities.Unknown.value
 
             out += newExtractorLink(
                 source = name,
-                name = if (height != null) "$name ${height}p" else name,
+                name = name,
                 url = variantUrl,
                 type = ExtractorLinkType.M3U8
             ) {
@@ -670,7 +667,6 @@ open class EmturbovidExtractor : ExtractorApi() {
             }
         }
 
-        // fallback kalau parsing gagal
         if (out.isEmpty()) {
             out += newExtractorLink(
                 source = name,

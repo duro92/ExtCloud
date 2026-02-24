@@ -11,7 +11,7 @@ class LayarKacaProviderPlugin: Plugin() {
         // All providers should be added in this manner. Please don't edit the providers list directly.
         LayarKacaProvider.context = context
         registerMainAPI(LayarKacaProvider())
-        registerExtractorAPI(Emturbovid())
+        registerExtractorAPI(EmturbovidExtractor())
         registerExtractorAPI(Furher())
         registerExtractorAPI(Hownetwork())
         registerExtractorAPI(VidHidePro6())
