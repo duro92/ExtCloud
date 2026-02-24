@@ -1,37 +1,41 @@
-## Buat ngopi : 
-https://saweria.co/duro92
+# ☁️ ExtCloud
 
-## Link Install :
+CloudStream Indonesian Extensions Repository
+
+---
+
+## 📥 Install ExtCloud
+
+Klik tombol di bawah untuk langsung install di CloudStream (Android):
+
+[![Install on CloudStream](https://img.shields.io/badge/Install-CloudStream-blue?style=for-the-badge&logo=android)](https://cutt.ly/QtQayEr4)
+
+Atau gunakan link manual berikut di CloudStream:
+
 https://raw.githubusercontent.com/duro92/ExtCloud/main/repo.json
 
-## Thanks To :
-1.  Tekuma25 : https://github.com/TeKuma25/IndoStream
-2.  Hexated
-3.  CSX : https://github.com/SaurabhKaperwan/CSX
-4.  Phisher98 : https://github.com/phisher98/cloudstream-extensions-phisher
-5.  Zeeorepo : https://github.com/funeelo/zeeorepo
-6.  Sofie99 : https://github.com/Sofie99/cloudstream-extensions-sofie
-
+---
 
+## ☕ Buat Ngopi
 
+Jika ingin support pengembangan:
 
+🔗 https://saweria.co/duro92
 
+---
 
+## 🙏 Thanks To
 
+1. [Tekuma25](https://github.com/TeKuma25/IndoStream)  
+2. Hexated  
+3. [CSX](https://github.com/SaurabhKaperwan/CSX)  
+4. [Phisher98](https://github.com/phisher98/cloudstream-extensions-phisher)  
+5. [Zeeorepo](https://github.com/funeelo/zeeorepo)  
+6. [Sofie99](https://github.com/Sofie99/cloudstream-extensions-sofie)
 
+---
 
+## ⚠️ Disclaimer
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+This repository does not host any content.  
+All content is provided by third-party sources.

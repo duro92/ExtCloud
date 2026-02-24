@@ -12,5 +12,8 @@ class MelongmoviePlugin : Plugin() {
         registerExtractorAPI(Dingtezuni())
         registerExtractorAPI(Melongfilmstrp2p())
         registerExtractorAPI(Dintezuvio())
+        registerExtractorAPI(Ukokoko())
+        registerExtractorAPI(Streamtape())
+        registerExtractorAPI(Hglink())
     }
 }
