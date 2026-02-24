@@ -17,8 +17,20 @@ class Playcinematic : ExtractorApi() {
     override val mainUrl = "https://playcinematic.com"
     override val requiresReferer = true
 
+    // model untuk parse tracks JSON (JWPlayer style)
+    data class Tracks(
+        val file: String,
+        val label: String? = null,
+        val kind: String? = null
+    )
+
     private fun toAbsolute(url: String): String {
-        return if (url.startsWith("http")) url else "$mainUrl${if (url.startsWith("/")) url else "/$url"}"
+        if (url.isBlank()) return url
+        return when {
+            url.startsWith("http", true) -> url
+            url.startsWith("//") -> "https:$url"
+            else -> "$mainUrl${if (url.startsWith("/")) url else "/$url"}"
+        }
     }
 
     private fun findStreamUrlFromHtml(html: String): String? {
@@ -36,6 +48,54 @@ class Playcinematic : ExtractorApi() {
         return null
     }
 
+    private fun extractSubtitlesFromText(
+        htmlOrJs: String,
+        subtitleCallback: (SubtitleFile) -> Unit
+    ) {
+        val text = htmlOrJs.replace("\\/", "/")
+
+        // 1) Ambil dari <track> tag (kalau ada)
+        Regex("""<track[^>]+src=["']([^"']+)["'][^>]*>""", RegexOption.IGNORE_CASE)
+            .findAll(text)
+            .forEach { m ->
+                val src = toAbsolute(m.groupValues[1].trim())
+                // coba ambil label / srclang jika tersedia
+                val tag = m.value
+                val label = Regex("""label=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+                    .find(tag)?.groupValues?.getOrNull(1)
+                val lang = Regex("""srclang=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+                    .find(tag)?.groupValues?.getOrNull(1)
+
+                subtitleCallback(
+                    SubtitleFile(
+                        getLanguage(label ?: lang ?: "Subtitle"),
+                        src
+                    )
+                )
+            }
+
+        // 2) Ambil dari JSON tracks: "tracks":[ ... ]
+        val subData = text
+            .substringAfter("\"tracks\":[", "")
+            .substringBefore("]", "")
+
+        if (subData.isNotBlank()) {
+            val json = "[$subData]"
+            tryParseJson<List<Tracks>>(json)
+                ?.filter { it.file.isNotBlank() }
+                ?.forEach { tr ->
+                    // kalau kind ada, bisa dipakai filter captions/subtitles saja
+                    // mis: tr.kind == "captions" || tr.kind == "subtitles"
+                    subtitleCallback(
+                        SubtitleFile(
+                            getLanguage(tr.label ?: "Subtitle"),
+                            toAbsolute(tr.file)
+                        )
+                    )
+                }
+        }
+    }
+
     override suspend fun getUrl(
         url: String,
         referer: String?,
@@ -50,6 +110,20 @@ class Playcinematic : ExtractorApi() {
         )
 
         val html = pageResp.text
+
+        // coba unpack kalau ada script eval(p,a,c,k,e,d)
+        val packed = pageResp.document
+            .select("script")
+            .firstOrNull { it.data().contains("eval(function(p,a,c,k,e,d)") }
+            ?.data()
+
+        val unpackedScript = packed?.let { runCatching { getAndUnpack(it) }.getOrNull() }
+
+        // ✅ Extract subtitle dari unpacked dulu (biasanya lebih lengkap)
+        if (!unpackedScript.isNullOrBlank()) extractSubtitlesFromText(unpackedScript, subtitleCallback)
+        // fallback: dari html biasa
+        extractSubtitlesFromText(html, subtitleCallback)
+
         val directFromTag = pageResp.document
             .selectFirst("video[src], source[src]")
             ?.attr("src")
@@ -57,15 +131,7 @@ class Playcinematic : ExtractorApi() {
 
         val streamUrl = when {
             !directFromTag.isNullOrBlank() -> directFromTag
-            else -> {
-                val unpackedScript = pageResp.document
-                    .select("script")
-                    .firstOrNull { it.data().contains("eval(function(p,a,c,k,e,d)") }
-                    ?.data()
-                    ?.let { runCatching { getAndUnpack(it) }.getOrNull() }
-
-                findStreamUrlFromHtml(unpackedScript ?: "") ?: findStreamUrlFromHtml(html)
-            }
+            else -> findStreamUrlFromHtml(unpackedScript ?: "") ?: findStreamUrlFromHtml(html)
         } ?: return
 
         val absoluteUrl = toAbsolute(streamUrl)
@@ -88,10 +154,10 @@ class Playcinematic : ExtractorApi() {
     }
 }
 
-    private fun getLanguage(str: String): String {
-        return when {
-            str.contains("indonesia", true) || str.contains("bahasa", true) -> "Indonesian"
-            else -> str
-        }
+private fun getLanguage(str: String): String {
+    return when {
+        str.contains("indonesia", true) || str.contains("bahasa", true) -> "Indonesian"
+        // boleh tambah mapping lain kalau perlu
+        else -> str
     }
-
+}
