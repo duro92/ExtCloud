@@ -87,3 +87,11 @@ class Playcinematic : ExtractorApi() {
         )
     }
 }
+
+    private fun getLanguage(str: String): String {
+        return when {
+            str.contains("indonesia", true) || str.contains("bahasa", true) -> "Indonesian"
+            else -> str
+        }
+    }
+
