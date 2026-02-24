@@ -12,7 +12,7 @@ class PusatfilmPlugin : Plugin() {
         Pusatfilm.context = context
         registerMainAPI(Pusatfilm())
         registerExtractorAPI(Kotakajaib())
-        registerExtractorAPI(Emturbovid())
+        registerExtractorAPI(EmturbovidExtractor())
         registerExtractorAPI(Gdriveplayerto())
     }
 }

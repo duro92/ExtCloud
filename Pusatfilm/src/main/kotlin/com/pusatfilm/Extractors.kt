@@ -3,7 +3,6 @@ package com.pusatfilm
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.base64Decode
-import com.lagradost.cloudstream3.extractors.EmturbovidExtractor
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -601,9 +600,91 @@ open class Kotakajaib : ExtractorApi() {
     }
 }
 
-class Emturbovid : EmturbovidExtractor() {
+open class EmturbovidExtractor : ExtractorApi() {
     override var name = "Emturbovid"
     override var mainUrl = "https://emturbovid.com"
+    override val requiresReferer = true
+
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        val ref = referer ?: "$mainUrl/"
+        val headers = mapOf(
+            "Referer" to "$mainUrl/",
+            "Origin" to mainUrl,
+            "User-Agent" to USER_AGENT,
+            "Accept" to "*/*"
+        )
+
+        val page = app.get(url, referer = ref)
+
+        val playerScript = page.document
+            .selectXpath("//script[contains(text(),'var urlPlay')]")
+            .html()
+
+        if (playerScript.isBlank()) return null
+
+        var masterUrl = playerScript
+            .substringAfter("var urlPlay = '")
+            .substringBefore("'")
+            .trim()
+
+        if (masterUrl.startsWith("//")) masterUrl = "https:$masterUrl"
+        if (masterUrl.startsWith("/")) masterUrl = mainUrl + masterUrl
+
+        // Fetch master playlist (level-1)
+        val masterText = app.get(masterUrl, headers = headers).text
+
+        val out = mutableListOf<ExtractorLink>()
+
+        // Parse variant: ambil RESOLUTION height, lalu URL di baris berikutnya
+        val lines = masterText.lines()
+        for (i in 0 until lines.size) {
+            val line = lines[i].trim()
+            if (!line.startsWith("#EXT-X-STREAM-INF")) continue
+
+            val res = Regex("RESOLUTION=\\d+x(\\d+)").find(line)?.groupValues?.getOrNull(1)
+            val height = res?.toIntOrNull()
+
+            // URL variant biasanya di baris berikutnya
+            val next = lines.getOrNull(i + 1)?.trim().orEmpty()
+            if (next.isBlank() || next.startsWith("#")) continue
+
+            var variantUrl = next
+            if (variantUrl.startsWith("//")) variantUrl = "https:$variantUrl"
+            else if (variantUrl.startsWith("/")) variantUrl = mainUrl + variantUrl
+
+            val q = when (height) {
+                2160 -> Qualities.UHD.value
+                1440 -> Qualities.QHD.value
+                1080 -> Qualities.FHD.value
+                720  -> Qualities.HD.value
+                480  -> Qualities.SD.value
+                360  -> Qualities.Low.value
+                else -> height ?: Qualities.Unknown.value
+            }
+
+            out += newExtractorLink(
+                source = name,
+                name = if (height != null) "$name ${height}p" else name,
+                url = variantUrl,
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = "$mainUrl/"
+                this.headers = headers
+                this.quality = q
+            }
+        }
+
+        // Fallback kalau parsing gagal: balikin master aja
+        if (out.isEmpty()) {
+            out += newExtractorLink(name, name, masterUrl, ExtractorLinkType.M3U8) {
+                this.referer = "$mainUrl/"
+                this.headers = headers
+                this.quality = Qualities.Unknown.value
+            }
+        }
+
+        return out
+    }
 }
 
 /**
