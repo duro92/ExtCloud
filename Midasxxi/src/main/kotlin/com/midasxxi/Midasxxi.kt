@@ -30,7 +30,9 @@ class Midasxxi : MainAPI() {
 
     override val mainPage = mainPageOf(
         "$mainUrl/movies" to "Movie Terbaru",
-        "$mainUrl/tvshows" to "TV Series Terbaru",
+        "$mainUrl/genre/action/" to "Action",
+        "$mainUrl/genre/horror/" to "Horror",
+        "$mainUrl/genre/drama/" to "Drama",
     )
 
     private fun getBaseUrl(url: String): String {
