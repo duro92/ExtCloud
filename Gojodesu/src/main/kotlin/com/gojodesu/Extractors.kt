@@ -606,10 +606,9 @@ open class EmturbovidExtractor : ExtractorApi() {
     override var mainUrl = "https://emturbovid.com"
     override val requiresReferer = true
 
+  
     private val UA =
-        try { USER_AGENT } catch (_: Throwable) {
-            "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-        }
+        "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
     private fun hostOf(u: String?): String? = runCatching { java.net.URI(u).host?.lowercase() }.getOrNull()
 
@@ -658,22 +657,17 @@ open class EmturbovidExtractor : ExtractorApi() {
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val upstreamRef = referer ?: "$mainUrl/"
-        val upstreamHost = hostOf(upstreamRef)
 
- 
-        val page = app.get(
-            url,
-            referer = upstreamRef,
-            headers = mapOf(
-                "Referer" to upstreamRef,
-                "User-Agent" to UA,
-                "Accept" to "*/*"
-            )
+        val pageHeaders = mapOf(
+            "Referer" to upstreamRef,
+            "User-Agent" to UA,
+            "Accept" to "*/*",
+            "Accept-Language" to "en-US,en;q=0.9",
         )
 
+        val page = app.get(url, referer = upstreamRef, headers = pageHeaders)
         val pageText = page.text
 
-        // 2) Ambil master dari var urlPlay
         val masterRaw = Regex("""\bvar\s+urlPlay\s*=\s*['"]([^'"]+)['"]""", RegexOption.IGNORE_CASE)
             .find(pageText)?.groupValues?.getOrNull(1)
             ?: return null
@@ -681,26 +675,17 @@ open class EmturbovidExtractor : ExtractorApi() {
         val masterUrl = absoluteUrl(page.url, masterRaw)
         val masterHost = hostOf(masterUrl)
 
- 
-        val playReferer = if (isTurboHost(masterHost) || isTurboHost(upstreamHost)) {
-            "https://turbovidhls.com/"
-        } else {
-            // normal: pakai emturbovid
-            "$mainUrl/"
-        }
+     
+        val playReferer = if (isTurboHost(masterHost)) "https://turbovidhls.com/" else "$mainUrl/"
 
-        val playHeaders = buildMap {
-            put("Referer", playReferer)
-            put("User-Agent", UA)
-            put("Accept", "*/*")
-            put("Accept-Language", "en-US,en;q=0.9")
-            // Origin hanya buat turbo (kadang wajib)
-            if (isTurboHost(masterHost) || isTurboHost(upstreamHost)) {
-                put("Origin", "https://turbovidhls.com")
-            }
-        }
+        val playHeaders = mapOf(
+            "Referer" to playReferer,
+            "User-Agent" to UA,
+            "Accept" to "*/*",
+            "Accept-Language" to "en-US,en;q=0.9",
+        )
 
-      
+  
         findIds(pageText)?.let { (vid, uid) ->
             runCatching { app.get("https://ver03.sptvp.com/watch?videoID=$vid&userID=$uid", referer = playReferer, headers = playHeaders) }
             runCatching { app.get("https://ver02.sptvp.com/watch?videoID=$vid&userID=$uid", referer = playReferer, headers = playHeaders) }
