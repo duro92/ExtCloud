@@ -1,7 +1,7 @@
 version = 1
 
 cloudstream {
-    description = "Gojodesu"
+    description = "Layarasia"
     language = "id"
     authors = listOf("Duro92")
 
@@ -14,10 +14,10 @@ cloudstream {
      * */
     status = 1 // will be 3 if unspecified
     tvTypes = listOf(
-        "AnimeMovie",
-        "OVA",
-        "Anime",
+        "AsianDrama",
+        "TvSeries",
+        "Movie",
     )
 
-    iconUrl = "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://gojodesu.com&size=%size%"
+    iconUrl = "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://layarasia.site&size=%size%"
 }

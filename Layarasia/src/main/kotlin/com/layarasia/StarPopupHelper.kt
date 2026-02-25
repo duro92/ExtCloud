@@ -1,4 +1,4 @@
-package com.gojodesu
+package com.oppadrama
 
 import android.app.Activity
 import android.app.AlertDialog
