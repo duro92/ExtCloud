@@ -3,7 +3,7 @@ package com.kuramanime
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
-import com.lagradost.cloudstream3.amap
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.Qualities
@@ -14,13 +14,12 @@ import org.jsoup.nodes.Element
 
 class KuramanimeProvider : MainAPI() {
     override var mainUrl = "https://v14.kuramanime.tel"
-    override var name = "Kuramanime🐱‍🏍"
+    override var name = "Kuramanime🐱"
     override val hasQuickSearch = false
     override val hasMainPage = true
     override var lang = "id"
     override var sequentialMainPage = true
     override val hasDownloadSupport = true
-    var authorization : String? = "xfVsnNKVqGNzM2yUGtjtsHZvNU6DCPUKTHwI"
     override val supportedTypes = setOf(
         TvType.Anime,
         TvType.AnimeMovie,
@@ -28,8 +27,6 @@ class KuramanimeProvider : MainAPI() {
     )
 
     companion object {
-        private var cookies: Map<String, String> = mapOf()
-
         fun getType(t: String, s: Int): TvType {
             return if (t.contains("OVA", true) || t.contains("Special")) TvType.OVA
             else if (t.contains("Movie", true) && s == 1) TvType.AnimeMovie
@@ -162,44 +159,69 @@ class KuramanimeProvider : MainAPI() {
 
     }
 
-    private suspend fun invokeLocalSource(
-        url: String,
-        server: String,
-        headers: Map<String, String>,
+    private suspend fun emitPublicVideoSources(
+        document: org.jsoup.nodes.Document,
+        pageUrl: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ) {
-        val document = app.post(
-            url,
-            data = mapOf("authorization" to getAuth()),
-            headers = headers,
-            cookies = cookies
-        ).document
-        document.select("video#player > source").map {
-            val link = fixUrl(it.attr("src"))
-            val quality = it.attr("size").toIntOrNull()
+    ): Boolean {
+        val emitted = mutableSetOf<String>()
+
+        suspend fun emit(rawUrl: String?, qualityHint: String? = null) {
+            val cleaned = rawUrl?.trim()?.replace("\\/", "/")?.takeIf { it.isNotBlank() } ?: return
+            val fixed = fixUrl(cleaned)
+            if (!emitted.add(fixed)) return
+
+            val quality = qualityHint?.toIntOrNull()
+                ?: Regex("""(\d{3,4})p""", RegexOption.IGNORE_CASE)
+                    .find(fixed)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    ?.toIntOrNull()
+                ?: Qualities.Unknown.value
+
+            val type = if (fixed.contains(".m3u8", true)) ExtractorLinkType.M3U8 else INFER_TYPE
+
             callback.invoke(
                 newExtractorLink(
-                    fixTitle(server),
-                    fixTitle(server),
-                    link,
-                    INFER_TYPE
+                    source = "Kuramanime",
+                    name = "Kuramanime",
+                    url = fixed,
+                    type = type
                 ) {
+                    this.referer = pageUrl
+                    this.quality = quality
                     this.headers = mapOf(
-                        "Accept" to "video/webm,video/ogg,video/*;q=0.9,application/ogg;q=0.7,audio/*;q=0.6,*/*;q=0.5",
-                        "Range" to "bytes=0-",
-                        "Sec-Fetch-Dest" to "video",
-                        "Sec-Fetch-Mode" to "no-cors",
+                        "Referer" to pageUrl,
+                        "Origin" to mainUrl,
+                        "Accept" to "*/*",
+                        "Range" to "bytes=0-"
                     )
-                    this.quality = quality ?: Qualities.Unknown.value
                 }
             )
         }
-        if (server == "kuramadrive") {
-            document.select("div#animeDownloadLink a").amap {
-                loadExtractor(it.attr("href"), "$mainUrl/", subtitleCallback, callback)
-            }
+
+        suspend fun emitExtractor(rawUrl: String?) {
+            val cleaned = rawUrl?.trim()?.replace("\\/", "/")?.takeIf { it.isNotBlank() } ?: return
+            val fixed = fixUrl(cleaned)
+            if (!emitted.add(fixed)) return
+            loadExtractor(fixed, pageUrl, subtitleCallback, callback)
         }
+
+        val player = document.selectFirst("video#player, video#anime_player, video")
+        emit(player?.attr("data-hls-src"))
+        emit(player?.attr("data-src"))
+        emit(player?.attr("src"))
+
+        for (it in document.select("video#player source[src], video source[src]")) {
+            emit(it.attr("src"), it.attr("size"))
+        }
+
+        for (it in document.select("div.iframe-container iframe[src], iframe[src]")) {
+            emitExtractor(it.attr("src"))
+        }
+
+        return emitted.isNotEmpty()
     }
 
     override suspend fun loadLinks(
@@ -208,107 +230,9 @@ class KuramanimeProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-
         val req = app.get(data)
         val res = req.document
-        cookies = req.cookies
-
-        val token = res.selectFirst("meta[name=csrf-token]")?.attr("content") ?: return false
-        val dataKps = res.selectFirst("div.col-lg-12.mt-3")?.attr("data-kk") ?: return false
-
-        val assets = getAssets(dataKps)
-
-        var headers = mapOf(
-            "X-CSRF-TOKEN" to token,
-            "X-Fuck-ID" to "${assets.MIX_AUTH_KEY}:${assets.MIX_AUTH_TOKEN}",
-            "X-Request-ID" to randomId(),
-            "X-Request-Index" to "0",
-            "X-Requested-With" to "XMLHttpRequest",
-        )
-
-        val tokenKey = app.get(
-            "$mainUrl/${assets.MIX_PREFIX_AUTH_ROUTE_PARAM}${assets.MIX_AUTH_ROUTE_PARAM}",
-            headers = headers,
-            cookies = cookies
-        ).text
-
-        headers = mapOf(
-            "X-CSRF-TOKEN" to token,
-            "X-Requested-With" to "XMLHttpRequest",
-        )
-
-        res.select("select#changeServer option").amap { source ->
-            val server = source.attr("value")
-            val link =
-                "$data?${assets.MIX_PAGE_TOKEN_KEY}=$tokenKey&${assets.MIX_STREAM_SERVER_KEY}=$server"
-            if (server.contains(Regex("(?i)kuramadrive|archive"))) {
-                invokeLocalSource(link, server, headers, subtitleCallback, callback)
-            } else {
-                app.post(
-                    link,
-                    data = mapOf("authorization" to getAuth()),
-                    referer = data,
-                    headers = headers,
-                    cookies = cookies
-                ).document.select("div.iframe-container iframe").attr("src").let { videoUrl ->
-                    loadExtractor(fixUrl(videoUrl), "$mainUrl/", subtitleCallback, callback)
-                }
-            }
-        }
-
-
-        return true
+        return emitPublicVideoSources(res, req.url, subtitleCallback, callback)
     }
-
-    private suspend fun getAssets(bpjs: String?): Assets {
-        val env = app.get("$mainUrl/assets/js/$bpjs.js").text
-        val MIX_PREFIX_AUTH_ROUTE_PARAM =
-            env.substringAfter("MIX_PREFIX_AUTH_ROUTE_PARAM: '").substringBefore("',")
-        val MIX_AUTH_ROUTE_PARAM =
-            env.substringAfter("MIX_AUTH_ROUTE_PARAM: '").substringBefore("',")
-        val MIX_AUTH_KEY = env.substringAfter("MIX_AUTH_KEY: '").substringBefore("',")
-        val MIX_AUTH_TOKEN = env.substringAfter("MIX_AUTH_TOKEN: '").substringBefore("',")
-        val MIX_PAGE_TOKEN_KEY = env.substringAfter("MIX_PAGE_TOKEN_KEY: '").substringBefore("',")
-        val MIX_STREAM_SERVER_KEY =
-            env.substringAfter("MIX_STREAM_SERVER_KEY: '").substringBefore("',")
-        return Assets(
-            MIX_PREFIX_AUTH_ROUTE_PARAM,
-            MIX_AUTH_ROUTE_PARAM,
-            MIX_AUTH_KEY,
-            MIX_AUTH_TOKEN,
-            MIX_PAGE_TOKEN_KEY,
-            MIX_STREAM_SERVER_KEY
-        )
-    }
-
-    suspend fun getAuth() : String {
-        return authorization ?: fetchAuth().also { authorization = it}
-    }
-    suspend fun fetchAuth() : String {
-        val url = "$mainUrl/storage/leviathan.js?v=512"
-        val res = app.get(url).text
-        val auth = Regex("""=\s*\[(.*?)]""").find(res)?.groupValues?.get(1)
-            ?.split(",")
-            ?.map { it.trim().removeSurrounding("'").removeSurrounding("\"") }
-            ?: throw ErrorLoadingException()
-
-        return "${auth.last()}${auth[9]}${auth[1]}${auth.first()}i"
-    }
-
-    private fun randomId(length: Int = 6): String {
-        val allowedChars = ('a'..'z') + ('A'..'Z') + ('0'..'9')
-        return (1..length)
-            .map { allowedChars.random() }
-            .joinToString("")
-    }
-
-    data class Assets(
-        val MIX_PREFIX_AUTH_ROUTE_PARAM: String?,
-        val MIX_AUTH_ROUTE_PARAM: String?,
-        val MIX_AUTH_KEY: String?,
-        val MIX_AUTH_TOKEN: String?,
-        val MIX_PAGE_TOKEN_KEY: String?,
-        val MIX_STREAM_SERVER_KEY: String?,
-    )
 
 }
