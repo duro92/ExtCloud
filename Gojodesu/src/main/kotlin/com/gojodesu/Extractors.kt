@@ -605,17 +605,35 @@ open class EmturbovidExtractor : ExtractorApi() {
     override var mainUrl = "https://emturbovid.com"
     override val requiresReferer = true
 
-    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val ref = referer ?: "$mainUrl/"
+    private fun origin(url: String?): String {
+        val fallback = "$mainUrl/"
+        if (url.isNullOrBlank()) return fallback
+        return runCatching {
+            val uri = java.net.URI(url)
+            "${uri.scheme}://${uri.host}/"
+        }.getOrDefault(fallback)
+    }
 
-        val headers = mapOf(
-            "Referer" to "$mainUrl/",
-            "Origin" to mainUrl,
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        val entryReferer = referer ?: "$mainUrl/"
+        val entryHeaders = mapOf(
+            "Referer" to entryReferer,
+            "Origin" to origin(entryReferer).removeSuffix("/"),
             "User-Agent" to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-            "Accept" to "*/*"
+            "Accept" to "*/*",
+            "Accept-Encoding" to "identity",
         )
 
-        val page = app.get(url, referer = ref)
+        val page = app.get(url, referer = entryReferer, headers = entryHeaders)
+        val pageOrigin = origin(page.url)
+        val mediaHeaders = mapOf(
+            "Referer" to pageOrigin,
+            "Origin" to pageOrigin.removeSuffix("/"),
+            "User-Agent" to entryHeaders["User-Agent"].orEmpty(),
+            "Accept" to "*/*",
+            "Accept-Encoding" to "identity",
+            "Range" to "bytes=0-",
+        )
 
         val playerScript = page.document
             .selectXpath("//script[contains(text(),'var urlPlay')]")
@@ -631,56 +649,20 @@ open class EmturbovidExtractor : ExtractorApi() {
         if (masterUrl.startsWith("//")) masterUrl = "https:$masterUrl"
         if (masterUrl.startsWith("/")) masterUrl = mainUrl + masterUrl
 
-        val masterText = app.get(masterUrl, headers = headers).text
-        val lines = masterText.lines()
-
-        val out = mutableListOf<ExtractorLink>()
-
-        for (i in 0 until lines.size) {
-            val line = lines[i].trim()
-            if (!line.startsWith("#EXT-X-STREAM-INF")) continue
-
-            val height = Regex("RESOLUTION=\\d+x(\\d+)")
-                .find(line)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?.toIntOrNull()
-
-            val next = lines.getOrNull(i + 1)?.trim().orEmpty()
-            if (next.isBlank() || next.startsWith("#")) continue
-
-            var variantUrl = next
-            if (variantUrl.startsWith("//")) variantUrl = "https:$variantUrl"
-            else if (variantUrl.startsWith("/")) variantUrl = mainUrl + variantUrl
-
-            val q = height ?: Qualities.Unknown.value
-
-            out += newExtractorLink(
-                source = name,
-                name = name,
-                url = variantUrl,
-                type = ExtractorLinkType.M3U8
-            ) {
-                this.referer = "$mainUrl/"
-                this.headers = headers
-                this.quality = q
-            }
-        }
-
-        if (out.isEmpty()) {
-            out += newExtractorLink(
+        // Use upstream master directly to avoid unstable nested "master.m3u8" variants.
+        // This reduces malformed stream issues seen after a few minutes on some hosts.
+        return listOf(
+            newExtractorLink(
                 source = name,
                 name = name,
                 url = masterUrl,
                 type = ExtractorLinkType.M3U8
             ) {
-                this.referer = "$mainUrl/"
-                this.headers = headers
+                this.referer = pageOrigin
+                this.headers = mediaHeaders
                 this.quality = Qualities.Unknown.value
             }
-        }
-
-        return out
+        )
     }
 }
 
