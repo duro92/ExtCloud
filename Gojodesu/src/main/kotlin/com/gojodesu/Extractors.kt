@@ -605,6 +605,15 @@ open class EmturbovidExtractor : ExtractorApi() {
     override var mainUrl = "https://emturbovid.com"
     override val requiresReferer = true
 
+    private fun absoluteUrl(base: String, value: String): String {
+        val raw = value.trim()
+        return when {
+            raw.startsWith("http://") || raw.startsWith("https://") -> raw
+            raw.startsWith("//") -> "https:$raw"
+            else -> runCatching { java.net.URI(base).resolve(raw).toString() }.getOrDefault(raw)
+        }
+    }
+
     private fun origin(url: String?): String {
         val fallback = "$mainUrl/"
         if (url.isNullOrBlank()) return fallback
@@ -612,6 +621,26 @@ open class EmturbovidExtractor : ExtractorApi() {
             val uri = java.net.URI(url)
             "${uri.scheme}://${uri.host}/"
         }.getOrDefault(fallback)
+    }
+
+    private fun parseVariants(master: String, masterUrl: String): List<Pair<String, Int>> {
+        val lines = master.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+        val out = ArrayList<Pair<String, Int>>()
+        for (i in lines.indices) {
+            val line = lines[i]
+            if (!line.startsWith("#EXT-X-STREAM-INF", ignoreCase = true)) continue
+            val next = lines.getOrNull(i + 1) ?: continue
+            if (next.startsWith("#")) continue
+
+            val qFromName = Regex("""NAME\s*=\s*"(\d{3,4})p"""", RegexOption.IGNORE_CASE)
+                .find(line)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            val qFromRes = Regex("""RESOLUTION\s*=\s*\d+\s*x\s*(\d+)""", RegexOption.IGNORE_CASE)
+                .find(line)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            val quality = qFromName ?: qFromRes ?: Qualities.Unknown.value
+
+            out.add(absoluteUrl(masterUrl, next) to quality)
+        }
+        return out
     }
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
@@ -625,32 +654,50 @@ open class EmturbovidExtractor : ExtractorApi() {
         )
 
         val page = app.get(url, referer = entryReferer, headers = entryHeaders)
-        val pageOrigin = origin(page.url)
+        val pageReferer = page.url
+        val pageOrigin = origin(page.url).removeSuffix("/")
         val mediaHeaders = mapOf(
-            "Referer" to pageOrigin,
-            "Origin" to pageOrigin.removeSuffix("/"),
+            "Referer" to pageReferer,
+            "Origin" to pageOrigin,
             "User-Agent" to entryHeaders["User-Agent"].orEmpty(),
             "Accept" to "*/*",
             "Accept-Encoding" to "identity",
-            "Range" to "bytes=0-",
         )
 
-        val playerScript = page.document
-            .selectXpath("//script[contains(text(),'var urlPlay')]")
-            .html()
+        val pageText = page.text
+        val masterRaw = Regex("""\bvar\s+urlPlay\s*=\s*['"]([^'"]+)['"]""", RegexOption.IGNORE_CASE)
+            .find(pageText)?.groupValues?.getOrNull(1)
+            ?: return null
 
-        if (playerScript.isBlank()) return null
+        val masterUrl = absoluteUrl(page.url, masterRaw)
+        val masterText = runCatching {
+            app.get(masterUrl, referer = pageReferer, headers = mediaHeaders).text
+        }.getOrNull().orEmpty()
 
-        var masterUrl = playerScript
-            .substringAfter("var urlPlay = '")
-            .substringBefore("'")
-            .trim()
+        val variants = if (masterText.trimStart().startsWith("#EXTM3U")) {
+            parseVariants(masterText, masterUrl)
+        } else {
+            emptyList()
+        }
 
-        if (masterUrl.startsWith("//")) masterUrl = "https:$masterUrl"
-        if (masterUrl.startsWith("/")) masterUrl = mainUrl + masterUrl
+        if (variants.isNotEmpty()) {
+            return variants
+                .distinctBy { it.first }
+                .sortedByDescending { it.second }
+                .map { (variantUrl, q) ->
+                    newExtractorLink(
+                        source = name,
+                        name = if (q != Qualities.Unknown.value) "$name ${q}p" else name,
+                        url = variantUrl,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = pageReferer
+                        this.headers = mediaHeaders
+                        this.quality = q
+                    }
+                }
+        }
 
-        // Use upstream master directly to avoid unstable nested "master.m3u8" variants.
-        // This reduces malformed stream issues seen after a few minutes on some hosts.
         return listOf(
             newExtractorLink(
                 source = name,
@@ -658,7 +705,7 @@ open class EmturbovidExtractor : ExtractorApi() {
                 url = masterUrl,
                 type = ExtractorLinkType.M3U8
             ) {
-                this.referer = pageOrigin
+                this.referer = pageReferer
                 this.headers = mediaHeaders
                 this.quality = Qualities.Unknown.value
             }
