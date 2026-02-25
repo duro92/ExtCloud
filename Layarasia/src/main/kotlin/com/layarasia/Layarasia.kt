@@ -26,9 +26,7 @@ class Layarasia : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    companion object {
-        var context: android.content.Context? = null
-        
+    companion object {  
         fun getStatus(t: String): ShowStatus {
             return when (t) {
                 "Completed" -> ShowStatus.Completed
@@ -48,7 +46,6 @@ class Layarasia : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        context?.let { StarPopupHelper.showStarPopupIfNeeded(it) }
         val url = "$mainUrl/${request.data}".plus("&page=$page")
         val document = app.get(url).document
         val items = document.select("div.listupd article.bs")
