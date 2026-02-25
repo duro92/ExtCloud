@@ -611,6 +611,16 @@ open class EmturbovidExtractor : ExtractorApi() {
             "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
         }
 
+    private fun hostOf(u: String?): String? = runCatching { java.net.URI(u).host?.lowercase() }.getOrNull()
+
+    private fun isTurboHost(host: String?): Boolean {
+        val h = host ?: return false
+        return h.contains("turbosplayer") ||
+                h.contains("turbovidhls") ||
+                h.contains("turboviplay") ||
+                h.contains("turbovid")
+    }
+
     private fun absoluteUrl(base: String, value: String): String {
         val raw = value.trim()
         return when {
@@ -639,7 +649,6 @@ open class EmturbovidExtractor : ExtractorApi() {
     }
 
     private fun findIds(text: String): Pair<String, String>? {
-   
         val vid = Regex("""videoID["']?\s*[:=]\s*["']?([a-zA-Z0-9]+)""", RegexOption.IGNORE_CASE)
             .find(text)?.groupValues?.getOrNull(1)
         val uid = Regex("""userID["']?\s*[:=]\s*["']?(\d+)""", RegexOption.IGNORE_CASE)
@@ -648,38 +657,57 @@ open class EmturbovidExtractor : ExtractorApi() {
     }
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val pageRef = referer ?: "$mainUrl/"
+        val upstreamRef = referer ?: "$mainUrl/"
+        val upstreamHost = hostOf(upstreamRef)
 
-        
-        val headers = mapOf(
-            "Referer" to pageRef,
-            "User-Agent" to UA,
-            "Accept" to "*/*"
+ 
+        val page = app.get(
+            url,
+            referer = upstreamRef,
+            headers = mapOf(
+                "Referer" to upstreamRef,
+                "User-Agent" to UA,
+                "Accept" to "*/*"
+            )
         )
 
-        
-        val page = app.get(url, referer = pageRef, headers = headers)
         val pageText = page.text
 
-        
+        // 2) Ambil master dari var urlPlay
         val masterRaw = Regex("""\bvar\s+urlPlay\s*=\s*['"]([^'"]+)['"]""", RegexOption.IGNORE_CASE)
             .find(pageText)?.groupValues?.getOrNull(1)
             ?: return null
 
         val masterUrl = absoluteUrl(page.url, masterRaw)
+        val masterHost = hostOf(masterUrl)
 
-        findIds(pageText)?.let { (vid, uid) ->
-            runCatching {
-                app.get("https://ver03.sptvp.com/watch?videoID=$vid&userID=$uid", referer = pageRef, headers = headers)
-            }
-            runCatching {
-                app.get("https://ver02.sptvp.com/watch?videoID=$vid&userID=$uid", referer = pageRef, headers = headers)
+ 
+        val playReferer = if (isTurboHost(masterHost) || isTurboHost(upstreamHost)) {
+            "https://turbovidhls.com/"
+        } else {
+            // normal: pakai emturbovid
+            "$mainUrl/"
+        }
+
+        val playHeaders = buildMap {
+            put("Referer", playReferer)
+            put("User-Agent", UA)
+            put("Accept", "*/*")
+            put("Accept-Language", "en-US,en;q=0.9")
+            // Origin hanya buat turbo (kadang wajib)
+            if (isTurboHost(masterHost) || isTurboHost(upstreamHost)) {
+                put("Origin", "https://turbovidhls.com")
             }
         }
 
-     
+      
+        findIds(pageText)?.let { (vid, uid) ->
+            runCatching { app.get("https://ver03.sptvp.com/watch?videoID=$vid&userID=$uid", referer = playReferer, headers = playHeaders) }
+            runCatching { app.get("https://ver02.sptvp.com/watch?videoID=$vid&userID=$uid", referer = playReferer, headers = playHeaders) }
+        }
+
         val masterText = runCatching {
-            app.get(masterUrl, referer = pageRef, headers = headers).text
+            app.get(masterUrl, referer = playReferer, headers = playHeaders).text
         }.getOrNull().orEmpty()
 
         val variants = if (masterText.trimStart().startsWith("#EXTM3U")) {
@@ -697,14 +725,13 @@ open class EmturbovidExtractor : ExtractorApi() {
                         url = variantUrl,
                         type = ExtractorLinkType.M3U8
                     ) {
-                        this.referer = pageRef
-                        this.headers = headers
+                        this.referer = playReferer
+                        this.headers = playHeaders
                         this.quality = q
                     }
                 }
         }
 
-     
         return listOf(
             newExtractorLink(
                 source = name,
@@ -712,8 +739,8 @@ open class EmturbovidExtractor : ExtractorApi() {
                 url = masterUrl,
                 type = ExtractorLinkType.M3U8
             ) {
-                this.referer = pageRef
-                this.headers = headers
+                this.referer = playReferer
+                this.headers = playHeaders
                 this.quality = Qualities.Unknown.value
             }
         )
