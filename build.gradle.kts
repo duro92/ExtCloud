@@ -10,6 +10,13 @@ buildscript {
         maven("https://jitpack.io")
     }
 
+    configurations.classpath {
+        resolutionStrategy {
+            // Avoid flaky JitPack metadata fetch for jadb:master-SNAPSHOT in CI.
+            force("com.github.vidstige:jadb:1.2.1")
+        }
+    }
+
     dependencies {
         classpath("com.android.tools.build:gradle:8.13.2")
         // Use Cloudstream3 fork of the gradle plugin on JitPack.
