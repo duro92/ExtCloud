@@ -3,6 +3,8 @@ package com.layarasia
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.extractors.VidStack
+import com.lagradost.cloudstream3.USER_AGENT
+import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
 import com.lagradost.cloudstream3.extractors.VidHidePro
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -68,7 +70,7 @@ class BuzzServer : ExtractorApi() {
 
 open class EmturbovidExtractor : ExtractorApi() {
     override var name = "Emturbovid"
-    override var mainUrl = "https://emturbovid.com"
+    override var mainUrl = "https://turbovidhls.com"
     override val requiresReferer = true
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
