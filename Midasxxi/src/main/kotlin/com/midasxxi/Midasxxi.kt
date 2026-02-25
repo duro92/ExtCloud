@@ -20,12 +20,7 @@ class Midasxxi : MainAPI() {
     override val hasMainPage = true
     override var lang = "id"
     override val hasDownloadSupport = true
-    override val supportedTypes = setOf(
-        TvType.Movie,
-        TvType.TvSeries,
-        TvType.Anime,
-        TvType.AsianDrama
-    )
+    override val supportedTypes = setOf(TvType.Movie)
 
 
     override val mainPage = mainPageOf(
@@ -106,6 +101,7 @@ class Midasxxi : MainAPI() {
         } else {
             TvType.Movie
         }
+        if (tvType != TvType.Movie) return null
         val quality = getQualityFromString(this.select("span.quality").text())
         return newMovieSearchResponse(title, href, tvType) {
             this.posterUrl = posterUrl
@@ -146,6 +142,7 @@ class Midasxxi : MainAPI() {
                 href.contains("/tvseries/", true) ||
                 it.classNames().any { c -> c.equals("tvshows", true) }
             ) TvType.TvSeries else TvType.Movie
+            if (type != TvType.Movie) return@mapNotNull null
 
             newMovieSearchResponse(title, href, type) {
                 this.posterUrl = posterUrl
