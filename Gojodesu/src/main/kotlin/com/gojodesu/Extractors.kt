@@ -605,6 +605,11 @@ open class EmturbovidExtractor : ExtractorApi() {
     override var mainUrl = "https://emturbovid.com"
     override val requiresReferer = true
 
+    private val UA =
+        try { USER_AGENT } catch (_: Throwable) {
+            "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+        }
+
     private fun absoluteUrl(base: String, value: String): String {
         val raw = value.trim()
         return when {
@@ -612,15 +617,6 @@ open class EmturbovidExtractor : ExtractorApi() {
             raw.startsWith("//") -> "https:$raw"
             else -> runCatching { java.net.URI(base).resolve(raw).toString() }.getOrDefault(raw)
         }
-    }
-
-    private fun origin(url: String?): String {
-        val fallback = "$mainUrl/"
-        if (url.isNullOrBlank()) return fallback
-        return runCatching {
-            val uri = java.net.URI(url)
-            "${uri.scheme}://${uri.host}/"
-        }.getOrDefault(fallback)
     }
 
     private fun parseVariants(master: String, masterUrl: String): List<Pair<String, Int>> {
@@ -632,53 +628,62 @@ open class EmturbovidExtractor : ExtractorApi() {
             val next = lines.getOrNull(i + 1) ?: continue
             if (next.startsWith("#")) continue
 
-            val qFromName = Regex("""NAME\s*=\s*"(\d{3,4})p"""", RegexOption.IGNORE_CASE)
+            val height = Regex("""RESOLUTION\s*=\s*\d+\s*x\s*(\d+)""", RegexOption.IGNORE_CASE)
                 .find(line)?.groupValues?.getOrNull(1)?.toIntOrNull()
-            val qFromRes = Regex("""RESOLUTION\s*=\s*\d+\s*x\s*(\d+)""", RegexOption.IGNORE_CASE)
-                .find(line)?.groupValues?.getOrNull(1)?.toIntOrNull()
-            val quality = qFromName ?: qFromRes ?: Qualities.Unknown.value
 
-            out.add(absoluteUrl(masterUrl, next) to quality)
+            val q = height ?: Qualities.Unknown.value
+            out += absoluteUrl(masterUrl, next) to q
         }
         return out
     }
 
+    private fun findIds(text: String): Pair<String, String>? {
+   
+        val vid = Regex("""videoID["']?\s*[:=]\s*["']?([a-zA-Z0-9]+)""", RegexOption.IGNORE_CASE)
+            .find(text)?.groupValues?.getOrNull(1)
+        val uid = Regex("""userID["']?\s*[:=]\s*["']?(\d+)""", RegexOption.IGNORE_CASE)
+            .find(text)?.groupValues?.getOrNull(1)
+        return if (!vid.isNullOrBlank() && !uid.isNullOrBlank()) vid to uid else null
+    }
+
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val entryReferer = referer ?: "$mainUrl/"
-        val entryHeaders = mapOf(
-            "Referer" to entryReferer,
-            "Origin" to origin(entryReferer).removeSuffix("/"),
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-            "Accept" to "*/*",
-            "Accept-Encoding" to "identity",
+        val pageRef = referer ?: "$mainUrl/"
+
+        
+        val headers = mapOf(
+            "Referer" to pageRef,
+            "User-Agent" to UA,
+            "Accept" to "*/*"
         )
 
-        val page = app.get(url, referer = entryReferer, headers = entryHeaders)
-        val pageReferer = page.url
-        val pageOrigin = origin(page.url).removeSuffix("/")
-        val mediaHeaders = mapOf(
-            "Referer" to pageReferer,
-            "Origin" to pageOrigin,
-            "User-Agent" to entryHeaders["User-Agent"].orEmpty(),
-            "Accept" to "*/*",
-            "Accept-Encoding" to "identity",
-        )
-
+        
+        val page = app.get(url, referer = pageRef, headers = headers)
         val pageText = page.text
+
+        
         val masterRaw = Regex("""\bvar\s+urlPlay\s*=\s*['"]([^'"]+)['"]""", RegexOption.IGNORE_CASE)
             .find(pageText)?.groupValues?.getOrNull(1)
             ?: return null
 
         val masterUrl = absoluteUrl(page.url, masterRaw)
+
+        findIds(pageText)?.let { (vid, uid) ->
+            runCatching {
+                app.get("https://ver03.sptvp.com/watch?videoID=$vid&userID=$uid", referer = pageRef, headers = headers)
+            }
+            runCatching {
+                app.get("https://ver02.sptvp.com/watch?videoID=$vid&userID=$uid", referer = pageRef, headers = headers)
+            }
+        }
+
+     
         val masterText = runCatching {
-            app.get(masterUrl, referer = pageReferer, headers = mediaHeaders).text
+            app.get(masterUrl, referer = pageRef, headers = headers).text
         }.getOrNull().orEmpty()
 
         val variants = if (masterText.trimStart().startsWith("#EXTM3U")) {
             parseVariants(masterText, masterUrl)
-        } else {
-            emptyList()
-        }
+        } else emptyList()
 
         if (variants.isNotEmpty()) {
             return variants
@@ -687,17 +692,18 @@ open class EmturbovidExtractor : ExtractorApi() {
                 .map { (variantUrl, q) ->
                     newExtractorLink(
                         source = name,
-                        name = if (q != Qualities.Unknown.value) "$name ${q}p" else name,
+                        name = name, 
                         url = variantUrl,
                         type = ExtractorLinkType.M3U8
                     ) {
-                        this.referer = pageReferer
-                        this.headers = mediaHeaders
+                        this.referer = pageRef
+                        this.headers = headers
                         this.quality = q
                     }
                 }
         }
 
+     
         return listOf(
             newExtractorLink(
                 source = name,
@@ -705,8 +711,8 @@ open class EmturbovidExtractor : ExtractorApi() {
                 url = masterUrl,
                 type = ExtractorLinkType.M3U8
             ) {
-                this.referer = pageReferer
-                this.headers = mediaHeaders
+                this.referer = pageRef
+                this.headers = headers
                 this.quality = Qualities.Unknown.value
             }
         )

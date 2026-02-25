@@ -224,50 +224,92 @@ class Gojodesu : MainAPI() {
     }
 
     override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        val document = app.get(data).document
+    data: String,
+    isCasting: Boolean,
+    subtitleCallback: (SubtitleFile) -> Unit,
+    callback: (ExtractorLink) -> Unit
+): Boolean {
+    val pageResp = app.get(data)
+    val document = pageResp.document
+    val html = pageResp.text
 
-        document.selectFirst("div.player-embed iframe")
-            ?.getIframeAttr()
-            ?.let { iframe ->
-                loadExtractor(httpsify(iframe), data, subtitleCallback, callback)
-            }
+    val postId = extractPostId(document, html)
+    if (!postId.isNullOrBlank()) {
+        val ajaxResp = runCatching {
+            app.post(
+                url = "https://gojodesu.com/wp-admin/admin-ajax.php",
+                headers = mapOf(
+                    "Referer" to data,
+                    "Origin" to "https://gojodesu.com",
+                    "X-Requested-With" to "XMLHttpRequest",
+                    "Accept" to "*/*"
+                ),
+                data = mapOf(
+                    "action" to "dynamic_view_ajax",
+                    "post_id" to postId
+                )
+            )
+        }.getOrNull()
 
-        val mirrorOptions = document.select("select.mirror option[value]:not([disabled])")
-        for (opt in mirrorOptions) {
-            val base64 = opt.attr("value")
-            if (base64.isBlank()) continue
-            try {
-                val cleaned = base64.replace("\\s".toRegex(), "")
-                val decodedHtml = base64Decode(cleaned)
-                val iframeTag = Jsoup.parse(decodedHtml).selectFirst("iframe")
-                val mirrorUrl = when {
-                    iframeTag?.attr("src")?.isNotBlank() == true -> iframeTag.attr("src")
-                    iframeTag?.attr("data-src")?.isNotBlank() == true -> iframeTag.attr("data-src")
-                    else -> null
+        val ajaxText = ajaxResp?.text.orEmpty()
+        if (ajaxText.isNotBlank()) {
+
+            val ajaxDoc = org.jsoup.Jsoup.parse(ajaxText)
+
+            ajaxDoc.select("iframe[src], iframe[data-src]").forEach { iframe ->
+                val src = iframe.attr("src").ifBlank { iframe.attr("data-src") }.trim()
+                if (src.isNotBlank()) {
+                    loadExtractor(httpsify(src), data, subtitleCallback, callback)
                 }
-                if (!mirrorUrl.isNullOrBlank()) {
-                    loadExtractor(httpsify(mirrorUrl), data, subtitleCallback, callback)
+            }
+
+            Regex("""https?://[^\s"'<>]+""")
+                .findAll(ajaxText)
+                .map { it.value }
+                .forEach { found ->
+                
+                    if (found.contains("embed", true) || found.contains("stream", true) || found.contains("m3u8", true)) {
+                        loadExtractor(httpsify(found), data, subtitleCallback, callback)
+                    }
                 }
-            } catch (_: Exception) {
-                // ignore broken mirrors
-            }
         }
-
-        val downloadLinks = document.select("div.dlbox li span.e a[href]")
-        for (a in downloadLinks) {
-            val url = a.attr("href").trim()
-            if (url.isNotBlank()) {
-                loadExtractor(httpsify(url), data, subtitleCallback, callback)
-            }
-        }
-
-        return true
     }
+
+   
+    document.selectFirst("div.player-embed iframe")
+        ?.getIframeAttr()
+        ?.let { iframe -> loadExtractor(httpsify(iframe), data, subtitleCallback, callback) }
+
+    val mirrorOptions = document.select("select.mirror option[value]:not([disabled])")
+    for (opt in mirrorOptions) {
+        val base64 = opt.attr("value")
+        if (base64.isBlank()) continue
+        try {
+            val cleaned = base64.replace("\\s".toRegex(), "")
+            val decodedHtml = base64Decode(cleaned)
+            val iframeTag = org.jsoup.Jsoup.parse(decodedHtml).selectFirst("iframe")
+            val mirrorUrl = when {
+                iframeTag?.attr("src")?.isNotBlank() == true -> iframeTag.attr("src")
+                iframeTag?.attr("data-src")?.isNotBlank() == true -> iframeTag.attr("data-src")
+                else -> null
+            }
+            if (!mirrorUrl.isNullOrBlank()) {
+                loadExtractor(httpsify(mirrorUrl), data, subtitleCallback, callback)
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    val downloadLinks = document.select("div.dlbox li span.e a[href]")
+    for (a in downloadLinks) {
+        val url = a.attr("href").trim()
+        if (url.isNotBlank()) {
+            loadExtractor(httpsify(url), data, subtitleCallback, callback)
+        }
+    }
+
+    return true
+}
 
     private fun Element.getImageAttr(): String {
         return when {
@@ -283,4 +325,18 @@ class Gojodesu : MainAPI() {
             ?: this?.attr("data-src").takeIf { it?.isNotEmpty() == true }
             ?: this?.attr("src")
     }
+}
+
+private fun extractPostId(doc: org.jsoup.nodes.Document, html: String): String? {
+    
+    Regex("""post_id["']?\s*[:=]\s*["']?(\d+)""", RegexOption.IGNORE_CASE)
+        .find(html)?.groupValues?.getOrNull(1)?.let { return it }
+
+    doc.selectFirst("[data-post]")?.attr("data-post")?.takeIf { it.isNotBlank() }?.let { return it }
+
+
+    Regex("""\bid=["']post-(\d+)["']""", RegexOption.IGNORE_CASE)
+        .find(html)?.groupValues?.getOrNull(1)?.let { return it }
+
+    return null
 }
