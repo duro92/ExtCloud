@@ -605,82 +605,153 @@ open class EmturbovidExtractor : ExtractorApi() {
     override var mainUrl = "https://emturbovid.com"
     override val requiresReferer = true
 
-    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val ref = referer ?: "$mainUrl/"
+    private val UA =
+        "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
-        val headers = mapOf(
-            "Referer" to "$mainUrl/",
-            "Origin" to mainUrl,
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-            "Accept" to "*/*"
-        )
+    private fun absoluteUrl(base: String, value: String): String {
+        val raw = value.trim()
+        return when {
+            raw.startsWith("http://") || raw.startsWith("https://") -> raw
+            raw.startsWith("//") -> "https:$raw"
+            else -> runCatching { java.net.URI(base).resolve(raw).toString() }.getOrDefault(raw)
+        }
+    }
 
-        val page = app.get(url, referer = ref)
+    private fun hostOf(u: String?): String? = runCatching { java.net.URI(u).host?.lowercase() }.getOrNull()
 
-        val playerScript = page.document
-            .selectXpath("//script[contains(text(),'var urlPlay')]")
-            .html()
+    private fun isTurboHost(host: String?): Boolean {
+        val h = host ?: return false
+        return h.contains("turbosplayer") ||
+                h.contains("turbovidhls") ||
+                h.contains("turboviplay") ||
+                h.contains("turbovid")
+    }
 
-        if (playerScript.isBlank()) return null
+    private fun parseVariants(master: String, masterUrl: String): List<Pair<String, Int>> {
+        val lines = master.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+        val out = ArrayList<Pair<String, Int>>()
 
-        var masterUrl = playerScript
-            .substringAfter("var urlPlay = '")
-            .substringBefore("'")
-            .trim()
+        for (i in lines.indices) {
+            val line = lines[i]
+            if (!line.startsWith("#EXT-X-STREAM-INF", ignoreCase = true)) continue
+            val next = lines.getOrNull(i + 1) ?: continue
+            if (next.startsWith("#")) continue
 
-        if (masterUrl.startsWith("//")) masterUrl = "https:$masterUrl"
-        if (masterUrl.startsWith("/")) masterUrl = mainUrl + masterUrl
-
-        val masterText = app.get(masterUrl, headers = headers).text
-        val lines = masterText.lines()
-
-        val out = mutableListOf<ExtractorLink>()
-
-        for (i in 0 until lines.size) {
-            val line = lines[i].trim()
-            if (!line.startsWith("#EXT-X-STREAM-INF")) continue
-
-            val height = Regex("RESOLUTION=\\d+x(\\d+)")
-                .find(line)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?.toIntOrNull()
-
-            val next = lines.getOrNull(i + 1)?.trim().orEmpty()
-            if (next.isBlank() || next.startsWith("#")) continue
-
-            var variantUrl = next
-            if (variantUrl.startsWith("//")) variantUrl = "https:$variantUrl"
-            else if (variantUrl.startsWith("/")) variantUrl = mainUrl + variantUrl
+            val height = Regex("""RESOLUTION\s*=\s*\d+\s*x\s*(\d+)""", RegexOption.IGNORE_CASE)
+                .find(line)?.groupValues?.getOrNull(1)?.toIntOrNull()
 
             val q = height ?: Qualities.Unknown.value
+            out += absoluteUrl(masterUrl, next) to q
+        }
+        return out
+    }
 
-            out += newExtractorLink(
-                source = name,
-                name = name,
-                url = variantUrl,
-                type = ExtractorLinkType.M3U8
-            ) {
-                this.referer = "$mainUrl/"
-                this.headers = headers
-                this.quality = q
-            }
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        val pageRef = referer ?: "$mainUrl/"
+
+       
+        val pageHeaders = mapOf(
+            "Referer" to pageRef,
+            "User-Agent" to UA,
+            "Accept" to "*/*",
+            "Accept-Language" to "en-US,en;q=0.9",
+        )
+
+        val page = app.get(url, referer = pageRef, headers = pageHeaders)
+        val pageText = page.text
+
+    
+        val urlPlayRaw = Regex("""\bvar\s+urlPlay\s*=\s*['"]([^'"]+)['"]""", RegexOption.IGNORE_CASE)
+            .find(pageText)?.groupValues?.getOrNull(1)
+            ?: return null
+
+        val playUrl = absoluteUrl(page.url, urlPlayRaw)
+        val playHost = hostOf(playUrl)
+
+        val playReferer = when {
+            playUrl.contains(".mp4", true) -> "https://turbovidhls.com/"
+            isTurboHost(playHost) -> "https://turbovidhls.com/"
+            else -> "$mainUrl/"
         }
 
-        if (out.isEmpty()) {
-            out += newExtractorLink(
+      
+        val playHeaders = mapOf(
+            "Referer" to playReferer,
+            "User-Agent" to UA,
+            "Accept" to "*/*",
+            "Accept-Language" to "en-US,en;q=0.9",
+        )
+
+     
+        if (playUrl.contains(".mp4", ignoreCase = true)) {
+            return listOf(
+                newExtractorLink(
+                    source = name,
+                    name = name,
+                    url = playUrl,
+                    type = ExtractorLinkType.VIDEO
+                ) {
+                    this.referer = playReferer
+                    this.headers = playHeaders
+                    this.quality = getQualityFromName(playUrl).takeIf { it != Qualities.Unknown.value }
+                        ?: Qualities.Unknown.value
+                }
+            )
+        }
+
+       
+        val masterText = runCatching {
+            app.get(playUrl, referer = playReferer, headers = playHeaders).text
+        }.getOrNull().orEmpty()
+
+       
+        if (!masterText.trimStart().startsWith("#EXTM3U")) {
+            return listOf(
+                newExtractorLink(
+                    source = name,
+                    name = name,
+                    url = playUrl,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = playReferer
+                    this.headers = playHeaders
+                    this.quality = Qualities.Unknown.value
+                }
+            )
+        }
+
+        val variants = parseVariants(masterText, playUrl)
+        if (variants.isNotEmpty()) {
+            return variants
+                .distinctBy { it.first }
+                .sortedByDescending { it.second }
+                .map { (variantUrl, q) ->
+                    newExtractorLink(
+                        source = name,
+                        name = name, 
+                        url = variantUrl,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = playReferer
+                        this.headers = playHeaders
+                        this.quality = q
+                    }
+                }
+        }
+
+     
+        return listOf(
+            newExtractorLink(
                 source = name,
                 name = name,
-                url = masterUrl,
+                url = playUrl,
                 type = ExtractorLinkType.M3U8
             ) {
-                this.referer = "$mainUrl/"
-                this.headers = headers
+                this.referer = playReferer
+                this.headers = playHeaders
                 this.quality = Qualities.Unknown.value
             }
-        }
-
-        return out
+        )
     }
 }
 
