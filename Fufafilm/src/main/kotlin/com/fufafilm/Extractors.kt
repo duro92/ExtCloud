@@ -143,6 +143,55 @@ class Dsvplay : DoodLaExtractor() {
     override var mainUrl = "https://dsvplay.com"
 }
 
+open class Upload18 : ExtractorApi() {
+    override val name = "Upload18"
+    override val mainUrl = "https://upload18.org"
+    override val requiresReferer = true
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val page = app.get(url, referer = referer)
+        val html = page.text
+        val scripts = page.document.select("script").joinToString("\n") { it.data() + it.html() }
+        val payload = "$html\n$scripts"
+
+        val hash = Regex("""token_hash\?hash=([^"'&\s]+)""")
+            .find(payload)
+            ?.groupValues
+            ?.getOrNull(1)
+
+        val headers = mapOf(
+            "User-Agent" to USER_AGENT,
+            "Referer" to "$mainUrl/",
+            "Origin" to mainUrl,
+            "Accept" to "*/*"
+        )
+
+        val m3u8Url = when {
+            !hash.isNullOrBlank() -> "$mainUrl/play/token_hash?hash=$hash"
+            else -> Regex("""https?://[^"'\\s]+\.m3u8[^"'\\s]*""")
+                .find(payload)
+                ?.groupValues
+                ?.getOrNull(0)
+        } ?: return
+
+        generateM3u8(
+            name = name,
+            url = m3u8Url,
+            referer = "$mainUrl/",
+            headers = headers
+        ).forEach(callback)
+    }
+}
+
+class Upload18com : Upload18() {
+    override val mainUrl = "https://upload18.com"
+}
+
 
 open class Dintezuvio : ExtractorApi() {
     override val name = "Earnvids"

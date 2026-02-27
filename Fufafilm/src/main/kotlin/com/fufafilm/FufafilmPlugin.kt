@@ -25,6 +25,8 @@ class FufafilmPlugin : Plugin() {
         registerExtractorAPI(Fufaupns())
         registerExtractorAPI(Fufastrp2p())
         registerExtractorAPI(Minochinos())
+        registerExtractorAPI(Upload18())
+        registerExtractorAPI(Upload18com())
     }
 }
 
