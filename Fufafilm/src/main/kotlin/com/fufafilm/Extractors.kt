@@ -180,8 +180,8 @@ open class Upload18 : ExtractorApi() {
         } ?: return
 
         generateM3u8(
-            name = name,
-            url = m3u8Url,
+            name,
+            m3u8Url,
             referer = "$mainUrl/",
             headers = headers
         ).forEach(callback)
