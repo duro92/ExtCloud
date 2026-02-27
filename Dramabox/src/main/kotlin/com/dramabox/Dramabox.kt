@@ -81,8 +81,12 @@ class Dramabox : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val bookId = url.substringAfterLast("/").substringBefore("?")
-        val detail = app.get("$mainUrl/api/dramabox/detail/$bookId").parsed<DramaItem>()
-        val chapters = app.get("$mainUrl/api/dramabox/allepisode/$bookId").parsed<List<Chapter>>()
+        val detailBody = app.get("$mainUrl/api/dramabox/detail/$bookId").text
+        val episodeBody = app.get("$mainUrl/api/dramabox/allepisode/$bookId").text
+
+        val detail = parseDetail(detailBody)
+            ?: throw ErrorLoadingException("Detail tidak ditemukan")
+        val chapters = parseChapters(episodeBody)
             .sortedBy { it.chapterIndex ?: Int.MAX_VALUE }
 
         val episodes = chapters.mapIndexed { index, chapter ->
@@ -123,7 +127,7 @@ class Dramabox : MainAPI() {
         val parsed = parseJson<LoadData>(data)
         val bookId = parsed.bookId ?: return false
 
-        val chapters = app.get("$mainUrl/api/dramabox/allepisode/$bookId").parsed<List<Chapter>>()
+        val chapters = parseChapters(app.get("$mainUrl/api/dramabox/allepisode/$bookId").text)
         val chapter = chapters.firstOrNull { !parsed.chapterId.isNullOrBlank() && it.chapterId == parsed.chapterId }
             ?: chapters.firstOrNull { parsed.chapterIndex != null && it.chapterIndex == parsed.chapterIndex }
             ?: return false
@@ -162,6 +166,24 @@ class Dramabox : MainAPI() {
 
     private fun LoadData.toJsonData(): String = this.toJson()
 
+    private fun parseDetail(body: String): DramaItem? {
+        return tryParseJson<DramaItem>(body)
+            ?: tryParseJson<DetailWrapper>(body)?.result
+            ?: tryParseJson<DetailWrapper>(body)?.data
+    }
+
+    private fun parseChapters(body: String): List<Chapter> {
+        val direct = tryParseJson<List<Chapter>>(body)
+        if (!direct.isNullOrEmpty()) return direct
+
+        val wrapped = tryParseJson<EpisodeWrapper>(body)
+        return wrapped?.result
+            ?: wrapped?.data
+            ?: wrapped?.list
+            ?: wrapped?.chapterList
+            ?: emptyList()
+    }
+
     data class LoadData(
         @JsonProperty("bookId") val bookId: String? = null,
         @JsonProperty("chapterId") val chapterId: String? = null,
@@ -177,12 +199,24 @@ class Dramabox : MainAPI() {
         @JsonProperty("tags") val tags: List<String>? = null,
     )
 
+    data class DetailWrapper(
+        @JsonProperty("result") val result: DramaItem? = null,
+        @JsonProperty("data") val data: DramaItem? = null,
+    )
+
     data class Chapter(
         @JsonProperty("chapterId") val chapterId: String? = null,
         @JsonProperty("chapterIndex") val chapterIndex: Int? = null,
         @JsonProperty("chapterName") val chapterName: String? = null,
         @JsonProperty("chapterImg") val chapterImg: String? = null,
         @JsonProperty("cdnList") val cdnList: List<CdnItem>? = null,
+    )
+
+    data class EpisodeWrapper(
+        @JsonProperty("result") val result: List<Chapter>? = null,
+        @JsonProperty("data") val data: List<Chapter>? = null,
+        @JsonProperty("list") val list: List<Chapter>? = null,
+        @JsonProperty("chapterList") val chapterList: List<Chapter>? = null,
     )
 
     data class CdnItem(
