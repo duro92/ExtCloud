@@ -9,7 +9,7 @@ import com.lagradost.cloudstream3.utils.*
 
 class Dramabox : MainAPI() {
     override var mainUrl = "https://dramabox-beta-hazel.vercel.app"
-    override var name = "Dramabox"
+    override var name = "Dramabox🐋"
     override var lang = "id"
     override val hasMainPage = true
     override val hasQuickSearch = true
