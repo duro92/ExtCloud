@@ -11,7 +11,7 @@ import java.net.URLEncoder
 
 class Freereels : MainAPI() {
     override var mainUrl = "https://api.sansekai.my.id"
-    override var name = "Freereels"
+    override var name = "Freereels🎀"
     override var lang = "id"
     override val hasMainPage = true
     override val hasQuickSearch = true
