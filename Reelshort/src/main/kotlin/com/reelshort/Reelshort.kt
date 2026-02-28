@@ -19,7 +19,6 @@ class Reelshort : MainAPI() {
     override val mainPage = mainPageOf(
         "/api/reelshort/foryou" to "Untukmu",
         "/api/reelshort/homepage" to "Beranda",
-        "/api/reelshort/animepage" to "Anime",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
