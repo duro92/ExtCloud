@@ -64,7 +64,7 @@ class Freereels : MainAPI() {
         if (title.isBlank()) return null
         return newTvSeriesSearchResponse(
             title,
-            "$mainUrl/series/$id",
+            "$mainUrl/book/$id",
             TvType.AsianDrama
         ) {
             posterUrl = cover
@@ -89,7 +89,7 @@ class Freereels : MainAPI() {
 
         return newTvSeriesLoadResponse(
             name = detail.title,
-            url = "$mainUrl/series/${detail.id}",
+            url = "$mainUrl/book/${detail.id}",
             type = TvType.AsianDrama,
             episodes = episodes
         ) {
@@ -192,37 +192,73 @@ class Freereels : MainAPI() {
     }
 
     private suspend fun fetchDetail(seriesId: String): DetailData? {
-        val body = app.get("$mainUrl/api/freereels/detailAndAllEpisode?id=$seriesId").text
-        val root = JSONObject(body)
-        val data = root.optJSONObject("data") ?: return null
-        val info = data.optJSONObject("info") ?: return null
+        val endpoints = listOf(
+            "$mainUrl/api/freereels/detailAndAllEpisode?id=$seriesId",
+            "$mainUrl/api/freereels/detailAndAllEpisode?key=$seriesId",
+        )
 
-        val episodes = mutableListOf<EpisodeData>()
-        val episodeArr = info.optJSONArray("episode_list")
-        if (episodeArr != null) {
-            for (i in 0 until episodeArr.length()) {
-                val ep = episodeArr.optJSONObject(i) ?: continue
-                episodes.add(parseEpisode(ep))
+        for (endpoint in endpoints) {
+            val body = runCatching { app.get(endpoint).text }.getOrNull() ?: continue
+            val root = runCatching { JSONObject(body) }.getOrNull() ?: continue
+
+            val dataObj = root.optJSONObject("data")
+            val info = dataObj?.optJSONObject("info")
+                ?: dataObj
+                ?: root
+
+            val episodesArray = info.optJSONArray("episode_list")
+                ?: dataObj?.optJSONArray("episode_list")
+                ?: root.optJSONArray("episode_list")
+                ?: root.optJSONArray("episodes")
+
+            val episodes = mutableListOf<EpisodeData>()
+            if (episodesArray != null) {
+                for (i in 0 until episodesArray.length()) {
+                    val ep = episodesArray.optJSONObject(i) ?: continue
+                    episodes.add(parseEpisode(ep))
+                }
             }
+
+            val tags = mutableListOf<String>()
+            tags.addAll(info.optStringList("tag"))
+            tags.addAll(info.optStringList("content_tags"))
+            tags.addAll(info.optStringList("series_tag"))
+            tags.addAll(dataObj?.optStringList("tag").orEmpty())
+            tags.addAll(root.optStringList("tag"))
+
+            val id = info.optStringSafe("id")
+                ?: info.optStringSafe("key")
+                ?: dataObj?.optStringSafe("id")
+                ?: dataObj?.optStringSafe("key")
+                ?: root.optStringSafe("id")
+                ?: root.optStringSafe("key")
+                ?: seriesId
+
+            val title = info.optStringSafe("name")
+                ?: info.optStringSafe("title")
+                ?: info.optStringSafe("book_name")
+                ?: root.optStringSafe("name")
+                ?: root.optStringSafe("title")
+                ?: root.optStringSafe("book_name")
+                ?: continue
+
+            return DetailData(
+                id = id,
+                title = title,
+                description = info.optStringSafe("desc")
+                    ?: info.optStringSafe("description")
+                    ?: root.optStringSafe("desc")
+                    ?: root.optStringSafe("description"),
+                cover = info.optStringSafe("cover")
+                    ?: info.optStringSafe("book_pic")
+                    ?: root.optStringSafe("cover")
+                    ?: root.optStringSafe("book_pic"),
+                tags = tags.distinct(),
+                episodes = episodes.sortedBy { it.index ?: Int.MAX_VALUE }
+            )
         }
 
-        val tags = mutableListOf<String>()
-        tags.addAll(info.optStringList("tag"))
-        tags.addAll(info.optStringList("content_tags"))
-        tags.addAll(info.optStringList("series_tag"))
-
-        val id = info.optString("id")
-        val title = info.optString("name")
-        if (id.isBlank() || title.isBlank()) return null
-
-        return DetailData(
-            id = id,
-            title = title,
-            description = info.optStringSafe("desc"),
-            cover = info.optStringSafe("cover"),
-            tags = tags.distinct(),
-            episodes = episodes.sortedBy { it.index ?: Int.MAX_VALUE }
-        )
+        return null
     }
 
     private fun parseSeriesItem(obj: JSONObject): SeriesItem? {
