@@ -10,6 +10,7 @@ import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.extractors.VidStack
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
 open class Gdplayer : ExtractorApi() {
@@ -92,4 +93,10 @@ class KotakAnimeidCom : Hxfile() {
 class Vidhidepre : Filesim() {
     override val name = "Vidhidepre"
     override var mainUrl = "https://vidhidepre.com"
+}
+
+class Rpmvip : VidStack() {
+    override var name = "Rpmvip"
+    override var mainUrl = "https://s1.rpmvip.com"
+    override var requiresReferer = true
 }

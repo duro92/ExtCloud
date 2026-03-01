@@ -16,5 +16,6 @@ class NontonAnimeIDProviderPlugin: Plugin() {
         registerExtractorAPI(Gdplayer())
         registerExtractorAPI(Kotaksb())
         registerExtractorAPI(Vidhidepre())
+        registerExtractorAPI(Rpmvip())
     }
 }
