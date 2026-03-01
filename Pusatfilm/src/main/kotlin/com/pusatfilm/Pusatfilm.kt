@@ -15,7 +15,7 @@ class Pusatfilm : MainAPI() {
     companion object {
         var context: android.content.Context? = null
     }
-    override var mainUrl = "https://v2.pusatfilm21info.net"
+    override var mainUrl = "https://v3.pusatfilm21info.com"
 
     override var name = "Pusatfilm🍖"
     override val hasMainPage = true
