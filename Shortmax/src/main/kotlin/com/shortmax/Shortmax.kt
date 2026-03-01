@@ -10,7 +10,7 @@ import java.net.URLEncoder
 
 class Shortmax : MainAPI() {
     override var mainUrl = "https://api.sansekai.my.id"
-    override var name = "Shortmax"
+    override var name = "Shortmax🐧"
     override var lang = "id"
     override val hasMainPage = true
     override val hasQuickSearch = true
