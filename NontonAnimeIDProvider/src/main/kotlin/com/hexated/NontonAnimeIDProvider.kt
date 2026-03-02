@@ -8,6 +8,7 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.amap
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import org.json.JSONObject
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -101,13 +102,13 @@ class NontonAnimeIDProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val fixUrl = if (url.contains("/anime/")) {
+        val canonicalUrl = if (url.contains("/anime/")) {
             url
         } else {
             app.get(url).document.selectFirst("div.nvs.nvsc a")?.attr("href")
         }
 
-        val req = app.get(fixUrl ?: return null)
+        val req = app.get(canonicalUrl ?: return null)
         mainUrl = getBaseUrl(req.url)
         val document = req.document
 
@@ -149,23 +150,21 @@ class NontonAnimeIDProvider : MainAPI() {
         val trailer = document.selectFirst("a.trailerbutton")?.attr("href")
 
         val episodes = if (document.select(".episode-list-items a.episode-item").isNotEmpty()) {
+            val episodeMap = linkedMapOf<String, EpisodeEntry>()
             document.select(".episode-list-items a.episode-item")
-                .mapNotNull {
-                    val episode = Regex("Episode\\s*(\\d+)", RegexOption.IGNORE_CASE)
-                        .find(it.text().trim())
-                        ?.groupValues
-                        ?.getOrNull(1)
-                        ?.toIntOrNull()
-                    val linkRaw = it.attr("href").ifBlank { it.attr("data-episode-url") }
-                    val link = linkRaw
-                        .takeIf { value -> value.isNotBlank() }
-                        ?.let { value -> fixUrl(value) }
-                        ?: return@mapNotNull null
-                    val safeEpisode = episode
-                        ?: extractEpisodeFromLink(link)
-                        ?: extractEpisodeFromLink(linkRaw)
+                .mapNotNull { parseEpisodeAnchor(it) }
+                .forEach { episodeMap[it.link] = it }
 
-                    newEpisode(link) { this.episode = safeEpisode }
+            val loadMoreEpisodes = loadMoreEpisodeAnchors(
+                document = document,
+                refererUrl = canonicalUrl,
+                existingLinks = episodeMap.keys
+            )
+            loadMoreEpisodes.forEach { episodeMap[it.link] = it }
+
+            episodeMap.values
+                .map { item ->
+                    newEpisode(item.link) { this.episode = item.episode }
                 }
                 .sortedBy { it.episode ?: Int.MAX_VALUE }
         } else if (document.select("button.buttfilter").isNotEmpty()) {
@@ -181,13 +180,14 @@ class NontonAnimeIDProvider : MainAPI() {
                         "misha_order_by" to "date-DESC",
                         "action" to "mishafilter",
                         "series_id" to id
-                    )
+                    ),
+                    referer = canonicalUrl
                 ).parsed<EpResponse>().content
             ).select("li").map {
                 val episode = Regex("Episode\\s?(\\d+)").find(
                     it.selectFirst("a")?.text().toString()
                 )?.groupValues?.getOrNull(1) ?: it.selectFirst("a")?.text()
-                val link = fixUrl(it.selectFirst("a")!!.attr("href"))
+                val link = this.fixUrl(it.selectFirst("a")!!.attr("href"))
                 newEpisode(link) { this.episode = episode?.toIntOrNull() }
             }.reversed()
         } else {
@@ -231,6 +231,77 @@ class NontonAnimeIDProvider : MainAPI() {
             addAniListId(tracker?.aniId?.toIntOrNull())
         }
 
+    }
+
+    private suspend fun loadMoreEpisodeAnchors(
+        document: Document,
+        refererUrl: String,
+        existingLinks: Collection<String>
+    ): List<EpisodeEntry> {
+        val scriptBody = document.select("script[src^=data:text/javascript;base64,]")
+            .mapNotNull { it.attr("src").substringAfter("base64,", "").takeIf { raw -> raw.isNotBlank() } }
+            .mapNotNull { encoded -> runCatching { base64Decode(encoded) }.getOrNull() }
+            .firstOrNull { decoded -> decoded.contains("misha_loadmore_params2") }
+            ?: return emptyList()
+
+        val start = scriptBody.indexOf('{')
+        val end = scriptBody.lastIndexOf('}')
+        if (start < 0 || end <= start) return emptyList()
+
+        val params = runCatching { JSONObject(scriptBody.substring(start, end + 1)) }.getOrNull()
+            ?: return emptyList()
+
+        val ajaxUrl = params.optString("ajaxurl").takeIf { it.isNotBlank() } ?: return emptyList()
+        val nonce = params.optString("nonce").takeIf { it.isNotBlank() } ?: return emptyList()
+        val query = params.optString("posts").takeIf { it.isNotBlank() } ?: return emptyList()
+        val type = params.optString("type")
+        val postsToDisplay = params.optString("posts_to_display")
+        val isLargeSeries = params.optString("is_large_series")
+        val totalPosts = params.optString("total_posts").toIntOrNull() ?: return emptyList()
+        val maxPage = params.optString("max_page").toIntOrNull() ?: return emptyList()
+        var currentPage = params.optString("current_page").toIntOrNull() ?: 1
+
+        val seenLinks = existingLinks.toMutableSet()
+        val foundEpisodes = mutableListOf<EpisodeEntry>()
+
+        while (seenLinks.size < totalPosts && currentPage <= maxPage) {
+            val responseHtml = runCatching {
+                app.post(
+                    url = this.fixUrl(ajaxUrl),
+                    data = mapOf(
+                        "action" to "loadmore2",
+                        "nonce" to nonce,
+                        "query" to query,
+                        "page" to currentPage.toString(),
+                        "type" to type,
+                        "posts_to_display" to postsToDisplay,
+                        "is_large_series" to isLargeSeries,
+                        "total_posts" to totalPosts.toString(),
+                    ),
+                    referer = refererUrl,
+                    headers = mapOf(
+                        "Origin" to mainUrl,
+                        "X-Requested-With" to "XMLHttpRequest",
+                    )
+                ).text
+            }.getOrNull() ?: break
+
+            val anchors = Jsoup.parse(responseHtml).select("a.episode-item")
+            if (anchors.isEmpty()) break
+
+            var newCount = 0
+            anchors.mapNotNull { parseEpisodeAnchor(it) }.forEach { episode ->
+                if (seenLinks.add(episode.link)) {
+                    foundEpisodes.add(episode)
+                    newCount++
+                }
+            }
+
+            if (newCount == 0) break
+            currentPage++
+        }
+
+        return foundEpisodes
     }
 
     override suspend fun loadLinks(
@@ -340,6 +411,23 @@ class NontonAnimeIDProvider : MainAPI() {
         }
     }
 
+    private fun parseEpisodeAnchor(anchor: Element): EpisodeEntry? {
+        val episode = Regex("Episode\\s*(\\d+)", RegexOption.IGNORE_CASE)
+            .find(anchor.text().trim())
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
+        val linkRaw = anchor.attr("href").ifBlank { anchor.attr("data-episode-url") }
+        val link = linkRaw
+            .takeIf { value -> value.isNotBlank() }
+            ?.let { value -> this.fixUrl(value) }
+            ?: return null
+        val safeEpisode = episode
+            ?: extractEpisodeFromLink(link)
+            ?: extractEpisodeFromLink(linkRaw)
+        return EpisodeEntry(link = link, episode = safeEpisode)
+    }
+
     private fun extractEpisodeFromLink(link: String?): Int? {
         if (link.isNullOrBlank()) return null
         return Regex("(?:episode|ep)[^\\d]*(\\d+)", RegexOption.IGNORE_CASE)
@@ -348,6 +436,11 @@ class NontonAnimeIDProvider : MainAPI() {
             ?.getOrNull(1)
             ?.toIntOrNull()
     }
+
+    private data class EpisodeEntry(
+        val link: String,
+        val episode: Int?,
+    )
 
     private data class EpResponse(
         @JsonProperty("posts") val posts: String?,
