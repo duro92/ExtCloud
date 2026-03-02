@@ -11,7 +11,7 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
 class Anoboy : MainAPI() {
-    override var mainUrl = "https://ww1.anoboy.boo"
+    override var mainUrl = "https://ww1.anoboy.boo⚡"
     override var name = "Anoboy"
     override val hasMainPage = true
     override var lang = "id"
