@@ -151,18 +151,21 @@ class NontonAnimeIDProvider : MainAPI() {
         val episodes = if (document.select(".episode-list-items a.episode-item").isNotEmpty()) {
             document.select(".episode-list-items a.episode-item")
                 .mapNotNull {
-                    val epText = it.selectFirst(".ep-title, .episode-title, span")?.text()?.trim()
-                        ?: it.text().trim()
                     val episode = Regex("Episode\\s*(\\d+)", RegexOption.IGNORE_CASE)
-                        .find(epText)?.groupValues?.getOrNull(1)
+                        .find(it.text().trim())
+                        ?.groupValues
+                        ?.getOrNull(1)
                         ?.toIntOrNull()
-                        ?: Regex("(\\d+)").find(epText)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                    val link = it.attr("href").ifBlank { it.attr("data-episode-url") }
+                    val linkRaw = it.attr("href").ifBlank { it.attr("data-episode-url") }
+                    val link = linkRaw
                         .takeIf { value -> value.isNotBlank() }
                         ?.let { value -> fixUrl(value) }
                         ?: return@mapNotNull null
+                    val safeEpisode = episode
+                        ?: extractEpisodeFromLink(link)
+                        ?: extractEpisodeFromLink(linkRaw)
 
-                    newEpisode(link) { this.episode = episode }
+                    newEpisode(link) { this.episode = safeEpisode }
                 }
                 .sortedBy { it.episode ?: Int.MAX_VALUE }
         } else if (document.select("button.buttfilter").isNotEmpty()) {
@@ -335,6 +338,15 @@ class NontonAnimeIDProvider : MainAPI() {
             this.hasAttr("srcset") -> this.attr("abs:srcset").substringBefore(" ")
             else -> this.attr("abs:src")
         }
+    }
+
+    private fun extractEpisodeFromLink(link: String?): Int? {
+        if (link.isNullOrBlank()) return null
+        return Regex("(?:episode|ep)[^\\d]*(\\d+)", RegexOption.IGNORE_CASE)
+            .find(link)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
     }
 
     private data class EpResponse(
