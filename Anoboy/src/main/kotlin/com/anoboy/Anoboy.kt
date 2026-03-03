@@ -45,7 +45,6 @@ class Anoboy : MainAPI() {
 
     override val mainPage = mainPageOf(
         "anime/" to "Baru Ditambahkan",
-        "anime-movie/" to "Movie",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
