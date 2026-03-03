@@ -381,18 +381,31 @@ class Anoboy : MainAPI() {
             }
         }
 
-        val bloggerOnly = discoveredUrls.filter {
+        val bloggerLinks = discoveredUrls.filter {
             it.contains("blogger.com/video.g", true) ||
                 it.contains("blogger.googleusercontent.com", true)
         }
 
-        val linksToLoad = when {
-            bloggerOnly.isNotEmpty() -> bloggerOnly
-            else -> discoveredUrls.filterNot { it.contains("mp4upload", true) }
+        val fallbackLinks = discoveredUrls.filterNot {
+            it.contains("blogger.com/video.g", true) ||
+                it.contains("blogger.googleusercontent.com", true)
         }
 
-        linksToLoad.distinct().forEach { link ->
-            loadExtractor(link, data, subtitleCallback, callback)
+        var foundLinks = 0
+        val callbackWrapper: (ExtractorLink) -> Unit = { link ->
+            foundLinks++
+            callback(link)
+        }
+
+        // Try Blogger first, but if current Blogger extractor fails, continue with all other mirrors.
+        bloggerLinks.distinct().forEach { link ->
+            loadExtractor(link, data, subtitleCallback, callbackWrapper)
+        }
+
+        if (foundLinks == 0) {
+            fallbackLinks.distinct().forEach { link ->
+                loadExtractor(link, data, subtitleCallback, callbackWrapper)
+            }
         }
 
         return true
