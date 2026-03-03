@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addScore
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
+import java.net.URI
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
@@ -284,75 +285,87 @@ class Anoboy : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
-        val links = linkedSetOf<String>()
+        val discoveredUrls = linkedSetOf<String>()
+        val queuedUrls = ArrayDeque<String>()
+        val crawledUrls = mutableSetOf<String>()
 
-        fun addLink(raw: String?) {
+        fun isValidUrl(raw: String?): Boolean {
             val clean = raw?.trim().orEmpty()
-            if (
-                clean.isBlank() ||
-                clean == "#" ||
-                clean.equals("none", true) ||
-                clean.startsWith("javascript", true)
-            ) return
-            links.add(fixUrl(clean))
+            return clean.isNotBlank() &&
+                clean != "#" &&
+                !clean.equals("none", true) &&
+                !clean.startsWith("javascript", true)
         }
 
-        addLink(document.selectFirst("iframe#mediaplayer")?.getIframeAttr())
-        addLink(document.selectFirst("div.player-embed iframe")?.getIframeAttr())
-
-        document.select("#fplay a#allmiror[data-video], #fplay a[data-video], a#allmiror[data-video]")
-            .forEach { addLink(it.attr("data-video")) }
-
-        document.select("div.download a.udl[href], div.download a[href], div.dlbox li span.e a[href]")
-            .forEach { addLink(it.attr("href")) }
-
-        suspend fun resolvePlayerUrls(inputUrl: String): Set<String> {
-            val out = linkedSetOf<String>()
-            out.add(inputUrl)
-
-            try {
-                val playerDoc = app.get(inputUrl, referer = data).document
-                playerDoc.select("iframe#mediaplayer, iframe[src], iframe[data-src]")
-                    .forEach { iframe ->
-                        val source = iframe.getIframeAttr()
-                        val clean = source?.trim().orEmpty()
-                        if (
-                            clean.isNotBlank() &&
-                            clean != "#" &&
-                            !clean.equals("none", true) &&
-                            !clean.startsWith("javascript", true)
-                        ) {
-                            out.add(fixUrl(clean))
-                        }
-                    }
-                playerDoc.select("a#allmiror[data-video], a[data-video]").forEach { anchor ->
-                    val mirror = anchor.attr("data-video").trim()
-                    if (
-                        mirror.isNotBlank() &&
-                        mirror != "#" &&
-                        !mirror.equals("none", true) &&
-                        !mirror.startsWith("javascript", true)
-                    ) {
-                        out.add(fixUrl(mirror))
-                    }
+        fun resolveUrl(raw: String?, base: String): String? {
+            if (!isValidUrl(raw)) return null
+            val clean = raw!!.trim()
+            return try {
+                when {
+                    clean.startsWith("http://", true) || clean.startsWith("https://", true) -> clean
+                    clean.startsWith("//") -> "https:$clean"
+                    else -> URI(base).resolve(clean).toString()
                 }
             } catch (_: Exception) {
-                // ignore broken mirror pages
+                try {
+                    fixUrl(clean)
+                } catch (_: Exception) {
+                    null
+                }
             }
-
-            return out
         }
 
-        val finalUrls = linkedSetOf<String>()
-        for (link in links) {
-            finalUrls.addAll(resolvePlayerUrls(link))
+        fun queueUrl(raw: String?, base: String) {
+            val resolved = resolveUrl(raw, base) ?: return
+            if (discoveredUrls.add(resolved)) queuedUrls.add(resolved)
         }
 
-        for (link in finalUrls) {
-            loadExtractor(link, data, subtitleCallback, callback)
+        fun extractFromDoc(baseUrl: String, doc: org.jsoup.nodes.Document) {
+            doc.select("iframe#mediaplayer, iframe#videoembed, div.player-embed iframe, iframe[src], iframe[data-src], iframe[data-litespeed-src]")
+                .forEach { queueUrl(it.getIframeAttr(), baseUrl) }
+
+            doc.select("#fplay a#allmiror[data-video], #fplay a[data-video], a#allmiror[data-video], a[data-video]")
+                .forEach { anchor ->
+                    queueUrl(anchor.attr("data-video"), baseUrl)
+                    queueUrl(anchor.attr("href"), baseUrl)
+                }
+
+            doc.select("div.download a.udl[href], div.download a[href], div.dlbox li span.e a[href]")
+                .forEach { queueUrl(it.attr("href"), baseUrl) }
+
+            val bloggerRegex = Regex("""https?://(?:www\.)?blogger\.com/video\.g\?[^"'<\s]+""", RegexOption.IGNORE_CASE)
+            doc.select("script").forEach { script ->
+                val scriptData = script.data()
+                bloggerRegex.findAll(scriptData).forEach { match ->
+                    queueUrl(match.value, baseUrl)
+                }
+            }
         }
 
-        if (finalUrls.isEmpty()) {
+        fun shouldCrawl(url: String): Boolean {
+            val lower = url.lowercase()
+            if (lower.contains("blogger.com/video.g")) return false
+            if (lower.endsWith(".mp4") || lower.endsWith(".m3u8")) return false
+            return lower.contains("anoboy.boo") ||
+                lower.contains("/uploads/") ||
+                lower.contains("adsbatch")
+        }
+
+        extractFromDoc(data, document)
+
+        var safety = 0
+        while (queuedUrls.isNotEmpty() && safety++ < 120) {
+            val next = queuedUrls.removeFirst()
+            if (!shouldCrawl(next) || !crawledUrls.add(next)) continue
+            try {
+                val nestedDoc = app.get(next, referer = data).document
+                extractFromDoc(next, nestedDoc)
+            } catch (_: Exception) {
+                // skip dead mirror page
+            }
+        }
+
+        if (discoveredUrls.isEmpty()) {
             // fallback for old mirrored options stored as base64 iframe html
             val mirrorOptions = document.select("select.mirror option[value]:not([disabled])")
             for (opt in mirrorOptions) {
@@ -361,12 +374,26 @@ class Anoboy : MainAPI() {
                 try {
                     val decodedHtml = base64Decode(base64.replace("\\s".toRegex(), ""))
                     Jsoup.parse(decodedHtml).selectFirst("iframe")?.getIframeAttr()?.let { iframe ->
-                        loadExtractor(fixUrl(iframe), data, subtitleCallback, callback)
+                        queueUrl(iframe, data)
                     }
                 } catch (_: Exception) {
                     // ignore broken base64 mirrors
                 }
             }
+        }
+
+        val bloggerOnly = discoveredUrls.filter {
+            it.contains("blogger.com/video.g", true) ||
+                it.contains("blogger.googleusercontent.com", true)
+        }
+
+        val linksToLoad = when {
+            bloggerOnly.isNotEmpty() -> bloggerOnly
+            else -> discoveredUrls.filterNot { it.contains("mp4upload", true) }
+        }
+
+        linksToLoad.distinct().forEach { link ->
+            loadExtractor(link, data, subtitleCallback, callback)
         }
 
         return true
