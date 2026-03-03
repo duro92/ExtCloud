@@ -323,6 +323,9 @@ class Anoboy : MainAPI() {
             doc.select("iframe#mediaplayer, iframe#videoembed, div.player-embed iframe, iframe[src], iframe[data-src], iframe[data-litespeed-src]")
                 .forEach { queueUrl(it.getIframeAttr(), baseUrl) }
 
+            doc.select("a[href*=\"yourupload.com/embed/\"], a[href*=\"yourupload.com/watch/\"], a[href*=\"www.yourupload.com/embed/\"], a[href*=\"www.yourupload.com/watch/\"]")
+                .forEach { queueUrl(it.attr("href"), baseUrl) }
+
             doc.select("#fplay a#allmiror[data-video], #fplay a[data-video], a#allmiror[data-video], a[data-video]")
                 .forEach { anchor ->
                     queueUrl(anchor.attr("data-video"), baseUrl)
