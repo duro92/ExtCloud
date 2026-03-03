@@ -101,6 +101,11 @@ class Hglink : StreamWishExtractor() {
     override val mainUrl = "https://hglink.to"
 }
 
+class Hgcloud : StreamWishExtractor() {
+    override val name = "Hgcloud"
+    override val mainUrl = "https://hgcloud.to"
+}
+
 class Gdriveplayerto : Gdriveplayer() {
     override val mainUrl: String = "https://gdriveplayer.to"
 }

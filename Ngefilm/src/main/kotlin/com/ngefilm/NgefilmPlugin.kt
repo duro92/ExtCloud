@@ -19,8 +19,8 @@ class NgefilmPlugin : Plugin() {
         registerExtractorAPI(P2pplay())
         registerExtractorAPI(Xshotcok())
         registerExtractorAPI(Dsvplay())
-
-registerExtractorAPI(Vidhidepre())
+        registerExtractorAPI(Hgcloud())
+        registerExtractorAPI(Vidhidepre())
     }
 }
 
