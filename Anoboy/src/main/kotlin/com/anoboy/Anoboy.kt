@@ -302,39 +302,47 @@ class Anoboy : MainAPI() {
 
         fun buildServerEpisodes(doc: org.jsoup.nodes.Document): List<Episode> {
             val serverGroups = doc.select("div.satu, div.dua, div.tiga, div.empat, div.lima, div.enam")
-            val bestGroup = serverGroups
-                .map { group -> group.select("a[data-video]") }
-                .filter { it.isNotEmpty() }
-                .maxByOrNull { it.size }
+            val anchors = serverGroups.flatMap { group -> group.select("a[data-video]") }
+            val fallbackAnchors = if (anchors.isNotEmpty()) anchors else doc.select("a[data-video]")
+            if (fallbackAnchors.isEmpty()) return emptyList()
 
-            val anchors = bestGroup?.ifEmpty { null } ?: doc.select("a[data-video]")
-            if (anchors.isEmpty()) return emptyList()
-
-            val episodesByNumber = LinkedHashMap<Int, Episode>()
-            anchors.forEachIndexed { index, anchor ->
+            val episodesByNumber = LinkedHashMap<Int, MutableList<Pair<String, String>>>()
+            fallbackAnchors.forEachIndexed { index, anchor ->
                 val dataVideo = anchor.attr("data-video").ifBlank { anchor.attr("href") }
                 if (!isValidEpisodeUrl(dataVideo)) return@forEachIndexed
 
-                val resolvedUrl = fixUrl(dataVideo)
                 val rawTitle = anchor.text().trim()
-                val cleanedTitle = normalizeTitle(rawTitle)
                 val episodeNumber = Regex("(\\d+)")
                     .find(rawTitle)
                     ?.groupValues
                     ?.getOrNull(1)
                     ?.toIntOrNull()
                     ?: (index + 1)
+                val resolvedUrl = fixUrl(dataVideo)
+                val cleanedTitle = normalizeTitle(rawTitle)
 
-                if (episodesByNumber.containsKey(episodeNumber)) return@forEachIndexed
-
-                val episode = newEpisode(resolvedUrl) {
-                    name = if (cleanedTitle.isBlank()) "Episode $episodeNumber" else cleanedTitle
-                    episode = episodeNumber
-                }
-                episodesByNumber[episodeNumber] = episode
+                episodesByNumber
+                    .getOrPut(episodeNumber) { mutableListOf() }
+                    .add(resolvedUrl to cleanedTitle)
             }
 
-            return episodesByNumber.values.toList()
+            return episodesByNumber
+                .toSortedMap()
+                .mapNotNull { (episodeNumber, entries) ->
+                    val urls = entries.map { it.first }.distinct()
+                    val title = entries.map { it.second }.firstOrNull { it.isNotBlank() }
+                        ?: "Episode $episodeNumber"
+                    if (urls.isEmpty()) return@mapNotNull null
+
+                    val data = if (urls.size == 1) urls.first() else {
+                        "multi::" + urls.joinToString("||")
+                    }
+
+                    newEpisode(data) {
+                        name = title
+                        episode = episodeNumber
+                    }
+                }
         }
 
         val serverEpisodes = buildServerEpisodes(document)
@@ -414,7 +422,9 @@ class Anoboy : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data).document
+        val multiPrefix = "multi::"
+        val isMulti = data.startsWith(multiPrefix)
+        val document = if (isMulti) null else app.get(data).document
         val discoveredUrls = linkedSetOf<String>()
         val queuedUrls = ArrayDeque<String>()
         val crawledUrls = mutableSetOf<String>()
@@ -501,7 +511,16 @@ class Anoboy : MainAPI() {
                 lower.contains("yupbatch")
         }
 
-        extractFromDoc(data, document)
+        if (document != null) {
+            extractFromDoc(data, document)
+        }
+        if (isMulti) {
+            data.removePrefix(multiPrefix)
+                .split("||")
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .forEach { queueUrl(it, mainUrl) }
+        }
 
         var safety = 0
         while (queuedUrls.isNotEmpty() && safety++ < 120) {
@@ -515,7 +534,7 @@ class Anoboy : MainAPI() {
             }
         }
 
-        if (discoveredUrls.isEmpty()) {
+        if (discoveredUrls.isEmpty() && document != null) {
             // fallback for old mirrored options stored as base64 iframe html
             val mirrorOptions = document.select("select.mirror option[value]:not([disabled])")
             for (opt in mirrorOptions) {
