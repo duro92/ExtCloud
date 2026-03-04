@@ -89,7 +89,7 @@ open class KotakAnimeidBase : ExtractorApi() {
         val origin = originOf(url)
 
         val sources = mutableListOf<ExtractorLink>()
-        sources.addAll(extractM3u8Sources(html, origin))
+        sources.addAll(extractStreamSources(html, origin))
         sources.addAll(extractScriptSources(document, origin))
 
         return sources.distinctBy { it.url }
@@ -128,36 +128,12 @@ class Rpmvip : VidStack() {
     override var requiresReferer = true
 }
 
-private suspend fun extractM3u8Sources(
+private suspend fun extractStreamSources(
     html: String,
     origin: String
 ): List<ExtractorLink> {
-    val unescaped = html.replace("\\/", "/")
-    val urls = LinkedHashSet<String>()
-    Regex("""https?://[^\s"'\\]+\.m3u8[^\s"'\\]*""", RegexOption.IGNORE_CASE)
-        .findAll(unescaped)
-        .forEach { urls.add(it.value) }
-    Regex("""//[^\s"'\\]+\.m3u8[^\s"'\\]*""", RegexOption.IGNORE_CASE)
-        .findAll(unescaped)
-        .forEach { urls.add(normalizeUrl(it.value)) }
-
-    if (urls.isEmpty()) return emptyList()
-
-    return urls.map { link ->
-        newExtractorLink(
-            "KotakAnimeid",
-            "KotakAnimeid",
-            link,
-            INFER_TYPE
-        ) {
-            this.referer = origin
-            this.headers = (headers ?: emptyMap()) + mapOf(
-                "Referer" to origin,
-                "Origin" to origin,
-                "User-Agent" to USER_AGENT
-            )
-        }
-    }
+    val urls = collectStreamUrls(html)
+    return buildLinksFromUrls(urls, origin)
 }
 
 private suspend fun extractScriptSources(
@@ -169,6 +145,7 @@ private suspend fun extractScriptSources(
         val data = script.data()
         if (data.contains("eval(function(p,a,c,k,e,d)")) {
             val unpacked = getAndUnpack(data)
+            sources.addAll(buildLinksFromUrls(collectStreamUrls(unpacked), origin))
             val src = unpacked.substringAfter("sources:[").substringBefore("]")
             tryParseJson<List<ResponseSource>>("[$src]")?.forEach { source ->
                 if (source.file.contains("googlevideo.com") || source.file.contains("source=blogger")) {
@@ -192,6 +169,7 @@ private suspend fun extractScriptSources(
                 )
             }
         } else if (data.contains("\"sources\":[")) {
+            sources.addAll(buildLinksFromUrls(collectStreamUrls(data), origin))
             val src = data.substringAfter("\"sources\":[").substringBefore("]")
             tryParseJson<List<ResponseSource>>("[$src]")?.forEach { source ->
                 if (source.file.contains("googlevideo.com") || source.file.contains("source=blogger")) {
@@ -218,9 +196,55 @@ private suspend fun extractScriptSources(
                     }
                 )
             }
+        } else {
+            sources.addAll(buildLinksFromUrls(collectStreamUrls(data), origin))
         }
     }
     return sources
+}
+
+private fun collectStreamUrls(text: String): List<String> {
+    val cleaned = text.replace("\\\\/", "/").replace("\\/", "/")
+    val urls = LinkedHashSet<String>()
+    val pattern =
+        Regex("""https?://[^\s"'\\]+?\.(m3u8|mp4|mkv|webm)(\?[^\s"'\\]*)?""",
+            RegexOption.IGNORE_CASE
+        )
+    pattern.findAll(cleaned).forEach { match ->
+        urls.add(match.value)
+    }
+    val patternRelative =
+        Regex("""//[^\s"'\\]+?\.(m3u8|mp4|mkv|webm)(\?[^\s"'\\]*)?""",
+            RegexOption.IGNORE_CASE
+        )
+    patternRelative.findAll(cleaned).forEach { match ->
+        urls.add(normalizeUrl(match.value))
+    }
+    return urls.toList()
+}
+
+private suspend fun buildLinksFromUrls(
+    urls: List<String>,
+    origin: String
+): List<ExtractorLink> {
+    if (urls.isEmpty()) return emptyList()
+    return urls
+        .filterNot { it.contains("googlevideo.com") || it.contains("source=blogger") }
+        .map { link ->
+            newExtractorLink(
+                "KotakAnimeid",
+                "KotakAnimeid",
+                link,
+                INFER_TYPE
+            ) {
+                this.referer = origin
+                this.headers = (headers ?: emptyMap()) + mapOf(
+                    "Referer" to origin,
+                    "Origin" to origin,
+                    "User-Agent" to USER_AGENT
+                )
+            }
+        }
 }
 
 private fun normalizeUrl(url: String): String {
