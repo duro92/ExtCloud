@@ -128,7 +128,7 @@ class Rpmvip : VidStack() {
     override var requiresReferer = true
 }
 
-private fun extractM3u8Sources(
+private suspend fun extractM3u8Sources(
     html: String,
     origin: String
 ): List<ExtractorLink> {
@@ -160,7 +160,7 @@ private fun extractM3u8Sources(
     }
 }
 
-private fun extractScriptSources(
+private suspend fun extractScriptSources(
     document: org.jsoup.nodes.Document,
     origin: String
 ): List<ExtractorLink> {
