@@ -12,6 +12,9 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.extractors.VidStack
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import com.lagradost.cloudstream3.utils.getAndUnpack
+import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.net.URL
 
@@ -74,16 +77,28 @@ class Nontonanimeid : Hxfile() {
     override val requiresReferer = true
 }
 
-class EmbedKotakAnimeid : Hxfile() {
-    override val name = "EmbedKotakAnimeid"
-    override val mainUrl = "https://embed2.kotakanimeid.com"
+open class KotakAnimeidBase : ExtractorApi() {
+    override val name = "KotakAnimeid"
+    override val mainUrl = "https://kotakanimeid.link"
     override val requiresReferer = true
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val hls = tryResolveKotakHlsFromPage(url, referer)
-        if (hls.isNotEmpty()) return hls
-        return super.getUrl(url, referer)?.filterNot { it.isGoogleVideo() }
+        val response = app.get(url, referer = referer)
+        val html = response.text
+        val document = response.document
+        val origin = originOf(url)
+
+        val sources = mutableListOf<ExtractorLink>()
+        sources.addAll(extractM3u8Sources(html, origin))
+        sources.addAll(extractScriptSources(document, origin))
+
+        return sources.distinctBy { it.url }
     }
+}
+
+class EmbedKotakAnimeid : KotakAnimeidBase() {
+    override val name = "EmbedKotakAnimeid"
+    override val mainUrl = "https://embed2.kotakanimeid.com"
 }
 
 class Kotaksb : Hxfile() {
@@ -92,28 +107,14 @@ class Kotaksb : Hxfile() {
     override val requiresReferer = true
 }
 
-class KotakAnimeidCom : Hxfile() {
+class KotakAnimeidCom : KotakAnimeidBase() {
     override val name = "KotakAnimeid"
     override val mainUrl = "https://kotakanimeid.com"
-    override val requiresReferer = true
-
-    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val hls = tryResolveKotakHlsFromPage(url, referer)
-        if (hls.isNotEmpty()) return hls
-        return super.getUrl(url, referer)?.filterNot { it.isGoogleVideo() }
-    }
 }
 
-class KotakAnimeidLink : Hxfile() {
+class KotakAnimeidLink : KotakAnimeidBase() {
     override val name = "KotakAnimeid"
     override val mainUrl = "https://kotakanimeid.link"
-    override val requiresReferer = true
-
-    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val hls = tryResolveKotakHlsFromPage(url, referer)
-        if (hls.isNotEmpty()) return hls
-        return super.getUrl(url, referer)?.filterNot { it.isGoogleVideo() }
-    }
 }
 
 class Vidhidepre : Filesim() {
@@ -127,11 +128,10 @@ class Rpmvip : VidStack() {
     override var requiresReferer = true
 }
 
-private suspend fun tryResolveKotakHlsFromPage(
-    url: String,
-    referer: String?
+private fun extractM3u8Sources(
+    html: String,
+    origin: String
 ): List<ExtractorLink> {
-    val html = app.get(url, referer = referer).text
     val unescaped = html.replace("\\/", "/")
     val urls = LinkedHashSet<String>()
     Regex("""https?://[^\s"'\\]+\.m3u8[^\s"'\\]*""", RegexOption.IGNORE_CASE)
@@ -143,7 +143,6 @@ private suspend fun tryResolveKotakHlsFromPage(
 
     if (urls.isEmpty()) return emptyList()
 
-    val origin = originOf(url)
     return urls.map { link ->
         newExtractorLink(
             "KotakAnimeid",
@@ -151,14 +150,77 @@ private suspend fun tryResolveKotakHlsFromPage(
             link,
             INFER_TYPE
         ) {
-            this.referer = url
+            this.referer = origin
             this.headers = (headers ?: emptyMap()) + mapOf(
-                "Referer" to url,
+                "Referer" to origin,
                 "Origin" to origin,
                 "User-Agent" to USER_AGENT
             )
         }
     }
+}
+
+private fun extractScriptSources(
+    document: org.jsoup.nodes.Document,
+    origin: String
+): List<ExtractorLink> {
+    val sources = mutableListOf<ExtractorLink>()
+    document.select("script").forEach { script ->
+        val data = script.data()
+        if (data.contains("eval(function(p,a,c,k,e,d)")) {
+            val unpacked = getAndUnpack(data)
+            val src = unpacked.substringAfter("sources:[").substringBefore("]")
+            tryParseJson<List<ResponseSource>>("[$src]")?.forEach { source ->
+                if (source.file.contains("googlevideo.com") || source.file.contains("source=blogger")) {
+                    return@forEach
+                }
+                sources.add(
+                    newExtractorLink(
+                        "KotakAnimeid",
+                        "KotakAnimeid",
+                        source.file,
+                        INFER_TYPE
+                    ) {
+                        this.referer = origin
+                        this.headers = (headers ?: emptyMap()) + mapOf(
+                            "Referer" to origin,
+                            "Origin" to origin,
+                            "User-Agent" to USER_AGENT
+                        )
+                        this.quality = getQualityFromName(source.label)
+                    }
+                )
+            }
+        } else if (data.contains("\"sources\":[")) {
+            val src = data.substringAfter("\"sources\":[").substringBefore("]")
+            tryParseJson<List<ResponseSource>>("[$src]")?.forEach { source ->
+                if (source.file.contains("googlevideo.com") || source.file.contains("source=blogger")) {
+                    return@forEach
+                }
+                sources.add(
+                    newExtractorLink(
+                        "KotakAnimeid",
+                        "KotakAnimeid",
+                        source.file,
+                        INFER_TYPE
+                    ) {
+                        this.referer = origin
+                        this.headers = (headers ?: emptyMap()) + mapOf(
+                            "Referer" to origin,
+                            "Origin" to origin,
+                            "User-Agent" to USER_AGENT
+                        )
+                        this.quality = when {
+                            source.label?.contains("HD") == true -> Qualities.P720.value
+                            source.label?.contains("SD") == true -> Qualities.P480.value
+                            else -> getQualityFromName(source.label)
+                        }
+                    }
+                )
+            }
+        }
+    }
+    return sources
 }
 
 private fun normalizeUrl(url: String): String {
@@ -170,6 +232,8 @@ private fun originOf(url: String): String {
     return "${parsed.protocol}://${parsed.host}"
 }
 
-private fun ExtractorLink.isGoogleVideo(): Boolean {
-    return url.contains("googlevideo.com/videoplayback") || url.contains("source=blogger")
-}
+private data class ResponseSource(
+    @JsonProperty("file") val file: String,
+    @JsonProperty("type") val type: String? = null,
+    @JsonProperty("label") val label: String? = null
+)
