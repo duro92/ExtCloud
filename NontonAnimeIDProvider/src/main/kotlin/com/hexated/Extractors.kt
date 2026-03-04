@@ -3,6 +3,7 @@ package com.hexated
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.APIHolder
 import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.USER_AGENT
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.extractors.Filesim
 import com.lagradost.cloudstream3.extractors.Hxfile
@@ -76,6 +77,10 @@ class EmbedKotakAnimeid : Hxfile() {
     override val name = "EmbedKotakAnimeid"
     override val mainUrl = "https://embed2.kotakanimeid.com"
     override val requiresReferer = true
+
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        return super.getUrl(url, referer)?.map { it.fixBloggerReferer() }
+    }
 }
 
 class Kotaksb : Hxfile() {
@@ -88,12 +93,20 @@ class KotakAnimeidCom : Hxfile() {
     override val name = "KotakAnimeid"
     override val mainUrl = "https://kotakanimeid.com"
     override val requiresReferer = true
+
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        return super.getUrl(url, referer)?.map { it.fixBloggerReferer() }
+    }
 }
 
 class KotakAnimeidLink : Hxfile() {
     override val name = "KotakAnimeid"
     override val mainUrl = "https://kotakanimeid.link"
     override val requiresReferer = true
+
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        return super.getUrl(url, referer)?.map { it.fixBloggerReferer() }
+    }
 }
 
 class Vidhidepre : Filesim() {
@@ -105,4 +118,16 @@ class Rpmvip : VidStack() {
     override var name = "Rpmvip"
     override var mainUrl = "https://s1.rpmvip.com"
     override var requiresReferer = true
+}
+
+private fun ExtractorLink.fixBloggerReferer(): ExtractorLink {
+    if (url.contains("googlevideo.com/videoplayback") || url.contains("source=blogger")) {
+        referer = "https://www.blogger.com/"
+        headers = (headers ?: emptyMap()) + mapOf(
+            "Referer" to "https://www.blogger.com/",
+            "Origin" to "https://www.blogger.com",
+            "User-Agent" to USER_AGENT
+        )
+    }
+    return this
 }
