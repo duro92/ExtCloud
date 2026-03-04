@@ -303,15 +303,17 @@ class Anoboy : MainAPI() {
         fun buildServerEpisodes(doc: org.jsoup.nodes.Document): List<Episode> {
             val serverGroups = doc.select("div.satu, div.dua, div.tiga, div.empat, div.lima, div.enam")
             val bestGroup = serverGroups
-                .map { group -> group to group.select("a[data-video]") }
-                .filter { it.second.isNotEmpty() }
-                .maxByOrNull { it.second.size }
-                ?.second
-                ?: return emptyList()
+                .map { group -> group.select("a[data-video]") }
+                .filter { it.isNotEmpty() }
+                .maxByOrNull { it.size }
 
-            return bestGroup.mapIndexedNotNull { index, anchor ->
+            val anchors = bestGroup?.ifEmpty { null } ?: doc.select("a[data-video]")
+            if (anchors.isEmpty()) return emptyList()
+
+            val episodesByNumber = LinkedHashMap<Int, Episode>()
+            anchors.forEachIndexed { index, anchor ->
                 val dataVideo = anchor.attr("data-video").ifBlank { anchor.attr("href") }
-                if (!isValidEpisodeUrl(dataVideo)) return@mapIndexedNotNull null
+                if (!isValidEpisodeUrl(dataVideo)) return@forEachIndexed
 
                 val resolvedUrl = fixUrl(dataVideo)
                 val rawTitle = anchor.text().trim()
@@ -323,11 +325,16 @@ class Anoboy : MainAPI() {
                     ?.toIntOrNull()
                     ?: (index + 1)
 
-                newEpisode(resolvedUrl) {
+                if (episodesByNumber.containsKey(episodeNumber)) return@forEachIndexed
+
+                val episode = newEpisode(resolvedUrl) {
                     name = if (cleanedTitle.isBlank()) "Episode $episodeNumber" else cleanedTitle
                     episode = episodeNumber
                 }
-            }.distinctBy { it.data }
+                episodesByNumber[episodeNumber] = episode
+            }
+
+            return episodesByNumber.values.toList()
         }
 
         val serverEpisodes = buildServerEpisodes(document)
