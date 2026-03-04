@@ -82,7 +82,7 @@ class EmbedKotakAnimeid : Hxfile() {
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val hls = tryResolveKotakHlsFromPage(url, referer)
         if (hls.isNotEmpty()) return hls
-        return super.getUrl(url, referer)
+        return super.getUrl(url, referer)?.filterNot { it.isGoogleVideo() }
     }
 }
 
@@ -100,7 +100,7 @@ class KotakAnimeidCom : Hxfile() {
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val hls = tryResolveKotakHlsFromPage(url, referer)
         if (hls.isNotEmpty()) return hls
-        return super.getUrl(url, referer)
+        return super.getUrl(url, referer)?.filterNot { it.isGoogleVideo() }
     }
 }
 
@@ -112,7 +112,7 @@ class KotakAnimeidLink : Hxfile() {
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val hls = tryResolveKotakHlsFromPage(url, referer)
         if (hls.isNotEmpty()) return hls
-        return super.getUrl(url, referer)
+        return super.getUrl(url, referer)?.filterNot { it.isGoogleVideo() }
     }
 }
 
@@ -168,4 +168,8 @@ private fun normalizeUrl(url: String): String {
 private fun originOf(url: String): String {
     val parsed = URL(url)
     return "${parsed.protocol}://${parsed.host}"
+}
+
+private fun ExtractorLink.isGoogleVideo(): Boolean {
+    return url.contains("googlevideo.com/videoplayback") || url.contains("source=blogger")
 }
