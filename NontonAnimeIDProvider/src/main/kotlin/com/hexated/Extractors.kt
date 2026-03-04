@@ -79,6 +79,8 @@ class EmbedKotakAnimeid : Hxfile() {
     override val requiresReferer = true
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        val blogger = tryResolveBloggerFromPage(url, referer)
+        if (blogger.isNotEmpty()) return blogger
         return super.getUrl(url, referer)?.map { it.fixBloggerReferer() }
     }
 }
@@ -95,6 +97,8 @@ class KotakAnimeidCom : Hxfile() {
     override val requiresReferer = true
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        val blogger = tryResolveBloggerFromPage(url, referer)
+        if (blogger.isNotEmpty()) return blogger
         return super.getUrl(url, referer)?.map { it.fixBloggerReferer() }
     }
 }
@@ -105,6 +109,8 @@ class KotakAnimeidLink : Hxfile() {
     override val requiresReferer = true
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        val blogger = tryResolveBloggerFromPage(url, referer)
+        if (blogger.isNotEmpty()) return blogger
         return super.getUrl(url, referer)?.map { it.fixBloggerReferer() }
     }
 }
@@ -118,6 +124,154 @@ class Rpmvip : VidStack() {
     override var name = "Rpmvip"
     override var mainUrl = "https://s1.rpmvip.com"
     override var requiresReferer = true
+}
+
+private const val BLOGGER_MAIN_URL = "https://www.blogger.com"
+
+private suspend fun tryResolveBloggerFromPage(
+    url: String,
+    referer: String?
+): List<ExtractorLink> {
+    val html = app.get(url, referer = referer).text
+    val found = findBloggerUrl(html) ?: return emptyList()
+    val normalized = normalizeUrl(found)
+    return resolveBloggerUrls(normalized, referer)
+}
+
+private fun findBloggerUrl(html: String): String? {
+    val tokenUrl = Regex(
+        """(?:https?:)?//(?:www\.)?blogger\.com/video\.g\?[^"'\\s>]+""",
+        RegexOption.IGNORE_CASE
+    ).find(html)?.value
+    if (tokenUrl != null) return tokenUrl
+    return Regex(
+        """https?://blogger\.googleusercontent\.com/[^"'\\s>]+""",
+        RegexOption.IGNORE_CASE
+    ).find(html)?.value
+}
+
+private fun normalizeUrl(url: String): String {
+    return if (url.startsWith("//")) "https:$url" else url
+}
+
+private suspend fun resolveBloggerUrls(
+    url: String,
+    referer: String?
+): List<ExtractorLink> {
+    val fixedUrl = normalizeUrl(url)
+    if (fixedUrl.contains("blogger.googleusercontent.com", true)) {
+        return listOf(
+            newExtractorLink(
+                "Blogger",
+                "Blogger",
+                fixedUrl,
+                INFER_TYPE
+            ) {
+                this.referer = referer ?: "$BLOGGER_MAIN_URL/"
+            }
+        )
+    }
+
+    val token = Regex("[?&]token=([^&]+)")
+        .find(fixedUrl)
+        ?.groupValues
+        ?.getOrNull(1)
+        ?: return emptyList()
+
+    val page = app.get(fixedUrl, referer = referer ?: "$BLOGGER_MAIN_URL/")
+    val html = page.text
+
+    val fSid = Regex("FdrFJe\":\"(\\d+)\"")
+        .find(html)
+        ?.groupValues
+        ?.getOrNull(1)
+        ?: return emptyList()
+    val bl = Regex("cfb2h\":\"([^\"]+)\"")
+        .find(html)
+        ?.groupValues
+        ?.getOrNull(1)
+        ?: return emptyList()
+    val hl = Regex("lang=\"([^\"]+)\"")
+        .find(html)
+        ?.groupValues
+        ?.getOrNull(1)
+        ?.ifBlank { null }
+        ?: "en-US"
+    val reqId = (10000..99999).random()
+    val rpcId = "WcwnYd"
+
+    val payload = """[[["$rpcId","[\"$token\",\"\",0]",null,"generic"]]]"""
+    val apiUrl = "$BLOGGER_MAIN_URL/_/BloggerVideoPlayerUi/data/batchexecute" +
+        "?rpcids=$rpcId&source-path=%2Fvideo.g&f.sid=$fSid&bl=$bl&hl=$hl&_reqid=$reqId&rt=c"
+
+    val response = app.post(
+        apiUrl,
+        data = mapOf("f.req" to payload),
+        referer = fixedUrl,
+        headers = mapOf(
+            "Origin" to BLOGGER_MAIN_URL,
+            "Content-Type" to "application/x-www-form-urlencoded;charset=UTF-8",
+            "User-Agent" to USER_AGENT
+        )
+    ).text
+
+    val decoded = decodeUnicodeEscapes(response)
+    val urls = Regex("""https://[^\s"']+""")
+        .findAll(decoded)
+        .map { it.value }
+        .filter {
+            it.contains("googlevideo.com/videoplayback") ||
+                it.contains("blogger.googleusercontent.com")
+        }
+        .distinct()
+        .toList()
+
+    return urls.map { videoUrl ->
+        val itag = Regex("[?&]itag=(\\d+)")
+            .find(videoUrl)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
+        newExtractorLink(
+            "Blogger",
+            "Blogger",
+            videoUrl,
+            INFER_TYPE
+        ) {
+            this.referer = "$BLOGGER_MAIN_URL/"
+            this.quality = itagToQuality(itag)
+        }
+    }
+}
+
+private fun decodeUnicodeEscapes(input: String): String {
+    val unicodeRegex = Regex("""\\\\u([0-9a-fA-F]{4})""")
+    var output = unicodeRegex.replace(input) { match ->
+        match.groupValues[1].toInt(16).toChar().toString()
+    }
+    output = output.replace("\\/", "/")
+    output = output.replace("\\\\", "\\")
+    output = output.replace("\\\"", "\"")
+    return output
+}
+
+private fun itagToQuality(itag: Int?): Int {
+    return when (itag) {
+        18 -> Qualities.P360.value
+        22 -> Qualities.P720.value
+        37 -> Qualities.P1080.value
+        59 -> Qualities.P480.value
+        43 -> Qualities.P360.value
+        36 -> Qualities.P240.value
+        17 -> Qualities.P144.value
+        137 -> Qualities.P1080.value
+        136 -> Qualities.P720.value
+        135 -> Qualities.P480.value
+        134 -> Qualities.P360.value
+        133 -> Qualities.P240.value
+        160 -> Qualities.P144.value
+        else -> Qualities.Unknown.value
+    }
 }
 
 private fun ExtractorLink.fixBloggerReferer(): ExtractorLink {
