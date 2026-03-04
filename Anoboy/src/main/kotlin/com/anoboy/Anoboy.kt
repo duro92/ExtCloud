@@ -292,6 +292,51 @@ class Anoboy : MainAPI() {
                 }
             }
 
+        fun isValidEpisodeUrl(raw: String?): Boolean {
+            val clean = raw?.trim().orEmpty()
+            return clean.isNotBlank() &&
+                clean != "#" &&
+                !clean.equals("none", true) &&
+                !clean.startsWith("javascript", true)
+        }
+
+        fun buildServerEpisodes(doc: org.jsoup.nodes.Document): List<Episode> {
+            val serverGroups = doc.select("div.satu, div.dua, div.tiga, div.empat, div.lima, div.enam")
+            val bestGroup = serverGroups
+                .map { group -> group to group.select("a[data-video]") }
+                .filter { it.second.isNotEmpty() }
+                .maxByOrNull { it.second.size }
+                ?.second
+                ?: return emptyList()
+
+            return bestGroup.mapIndexedNotNull { index, anchor ->
+                val dataVideo = anchor.attr("data-video").ifBlank { anchor.attr("href") }
+                if (!isValidEpisodeUrl(dataVideo)) return@mapIndexedNotNull null
+
+                val resolvedUrl = fixUrl(dataVideo)
+                val rawTitle = anchor.text().trim()
+                val cleanedTitle = normalizeTitle(rawTitle)
+                val episodeNumber = Regex("(\\d+)")
+                    .find(rawTitle)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    ?.toIntOrNull()
+                    ?: (index + 1)
+
+                newEpisode(resolvedUrl) {
+                    name = if (cleanedTitle.isBlank()) "Episode $episodeNumber" else cleanedTitle
+                    episode = episodeNumber
+                }
+            }.distinctBy { it.data }
+        }
+
+        val serverEpisodes = buildServerEpisodes(document)
+        val finalEpisodes = if (serverEpisodes.size > episodes.size && serverEpisodes.size > 1) {
+            serverEpisodes
+        } else {
+            episodes
+        }
+
         val altTitles = listOfNotNull(
             title,
             document.selectFirst("span:matchesOwn(Judul Inggris:)")?.ownText()?.trim(),
@@ -322,7 +367,7 @@ class Anoboy : MainAPI() {
 
         val tracker = APIHolder.getTracker(altTitles, TrackerType.getTypes(type), year, true)
 
-        return if (episodes.isNotEmpty()) {
+        return if (finalEpisodes.isNotEmpty()) {
             newAnimeLoadResponse(title, url, type) {
                 posterUrl = tracker?.image ?: poster
                 backgroundPosterUrl = tracker?.cover
@@ -332,7 +377,7 @@ class Anoboy : MainAPI() {
                 showStatus = status
                 this.recommendations = recommendations
                 this.duration = duration ?: 0
-                addEpisodes(DubStatus.Subbed, episodes)
+                addEpisodes(DubStatus.Subbed, finalEpisodes)
                 rating?.let { addScore(it.toString(), 10) }
                 addActors(actors)
                 if (castList.isNotEmpty()) this.actors = castList
