@@ -87,10 +87,11 @@ open class KotakAnimeidBase : ExtractorApi() {
         val html = response.text
         val document = response.document
         val origin = originOf(url)
+        val pageUrl = url
 
         val sources = mutableListOf<ExtractorLink>()
-        sources.addAll(extractStreamSources(html, origin))
-        sources.addAll(extractScriptSources(document, origin))
+        sources.addAll(extractStreamSources(html, pageUrl, origin))
+        sources.addAll(extractScriptSources(document, pageUrl, origin))
 
         return sources.distinctBy { it.url }
     }
@@ -130,14 +131,16 @@ class Rpmvip : VidStack() {
 
 private suspend fun extractStreamSources(
     html: String,
+    pageUrl: String,
     origin: String
 ): List<ExtractorLink> {
     val urls = collectStreamUrls(html)
-    return buildLinksFromUrls(urls, origin)
+    return buildLinksFromUrls(urls, pageUrl, origin)
 }
 
 private suspend fun extractScriptSources(
     document: org.jsoup.nodes.Document,
+    pageUrl: String,
     origin: String
 ): List<ExtractorLink> {
     val sources = mutableListOf<ExtractorLink>()
@@ -145,12 +148,9 @@ private suspend fun extractScriptSources(
         val data = script.data()
         if (data.contains("eval(function(p,a,c,k,e,d)")) {
             val unpacked = getAndUnpack(data)
-            sources.addAll(buildLinksFromUrls(collectStreamUrls(unpacked), origin))
+            sources.addAll(buildLinksFromUrls(collectStreamUrls(unpacked), pageUrl, origin))
             val src = unpacked.substringAfter("sources:[").substringBefore("]")
             tryParseJson<List<ResponseSource>>("[$src]")?.forEach { source ->
-                if (source.file.contains("googlevideo.com") || source.file.contains("source=blogger")) {
-                    return@forEach
-                }
                 sources.add(
                     newExtractorLink(
                         "KotakAnimeid",
@@ -158,9 +158,9 @@ private suspend fun extractScriptSources(
                         source.file,
                         INFER_TYPE
                     ) {
-                        this.referer = origin
+                        this.referer = pageUrl
                         this.headers = (headers ?: emptyMap()) + mapOf(
-                            "Referer" to origin,
+                            "Referer" to pageUrl,
                             "Origin" to origin,
                             "User-Agent" to USER_AGENT
                         )
@@ -169,12 +169,9 @@ private suspend fun extractScriptSources(
                 )
             }
         } else if (data.contains("\"sources\":[")) {
-            sources.addAll(buildLinksFromUrls(collectStreamUrls(data), origin))
+            sources.addAll(buildLinksFromUrls(collectStreamUrls(data), pageUrl, origin))
             val src = data.substringAfter("\"sources\":[").substringBefore("]")
             tryParseJson<List<ResponseSource>>("[$src]")?.forEach { source ->
-                if (source.file.contains("googlevideo.com") || source.file.contains("source=blogger")) {
-                    return@forEach
-                }
                 sources.add(
                     newExtractorLink(
                         "KotakAnimeid",
@@ -182,9 +179,9 @@ private suspend fun extractScriptSources(
                         source.file,
                         INFER_TYPE
                     ) {
-                        this.referer = origin
+                        this.referer = pageUrl
                         this.headers = (headers ?: emptyMap()) + mapOf(
-                            "Referer" to origin,
+                            "Referer" to pageUrl,
                             "Origin" to origin,
                             "User-Agent" to USER_AGENT
                         )
@@ -197,7 +194,7 @@ private suspend fun extractScriptSources(
                 )
             }
         } else {
-            sources.addAll(buildLinksFromUrls(collectStreamUrls(data), origin))
+            sources.addAll(buildLinksFromUrls(collectStreamUrls(data), pageUrl, origin))
         }
     }
     return sources
@@ -225,11 +222,11 @@ private fun collectStreamUrls(text: String): List<String> {
 
 private suspend fun buildLinksFromUrls(
     urls: List<String>,
+    pageUrl: String,
     origin: String
 ): List<ExtractorLink> {
     if (urls.isEmpty()) return emptyList()
     return urls
-        .filterNot { it.contains("googlevideo.com") || it.contains("source=blogger") }
         .map { link ->
             newExtractorLink(
                 "KotakAnimeid",
@@ -237,9 +234,9 @@ private suspend fun buildLinksFromUrls(
                 link,
                 INFER_TYPE
             ) {
-                this.referer = origin
+                this.referer = pageUrl
                 this.headers = (headers ?: emptyMap()) + mapOf(
-                    "Referer" to origin,
+                    "Referer" to pageUrl,
                     "Origin" to origin,
                     "User-Agent" to USER_AGENT
                 )
