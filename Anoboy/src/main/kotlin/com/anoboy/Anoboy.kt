@@ -338,11 +338,8 @@ class Anoboy : MainAPI() {
         }
 
         val serverEpisodes = buildServerEpisodes(document)
-        val finalEpisodes = if (serverEpisodes.size > episodes.size && serverEpisodes.size > 1) {
-            serverEpisodes
-        } else {
-            episodes
-        }
+        val useServerEpisodes = seasonHeaders.isEmpty() && serverEpisodes.isNotEmpty() && episodes.size <= 1
+        val finalEpisodes = if (useServerEpisodes) serverEpisodes else episodes
 
         val altTitles = listOfNotNull(
             title,
