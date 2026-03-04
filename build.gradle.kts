@@ -20,7 +20,7 @@ buildscript {
     dependencies {
         classpath("com.android.tools.build:gradle:8.13.2")
         // Use Cloudstream3 fork of the gradle plugin on JitPack.
-        classpath("com.github.recloudstream:gradle:cce1b8d84d")
+        classpath("com.github.recloudstream:gradle:-SNAPSHOT")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.3.0")
     }
 }
