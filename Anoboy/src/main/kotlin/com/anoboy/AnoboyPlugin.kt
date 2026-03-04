@@ -9,5 +9,6 @@ import com.lagradost.cloudstream3.plugins.Plugin
 class AnoboyPlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(Anoboy())
+        registerExtractorAPI(BloggerExtractor())
     }
 }
