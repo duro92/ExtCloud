@@ -12,7 +12,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class Flickreels : MainAPI() {
     override var mainUrl = buildBaseUrl()
-    override var name = "FlickReels"
+    override var name = "FlickReels😘"
     override var lang = "id"
     override val hasMainPage = true
     override val hasQuickSearch = true
@@ -66,8 +66,7 @@ class Flickreels : MainAPI() {
             .mapIndexed { index, chapter ->
                 val number = chapter.chapterNum ?: (index + 1)
                 val baseName = chapter.chapterTitle?.takeIf { it.isNotBlank() } ?: "Episode $number"
-                val locked = (chapter.isLock ?: 0) == 1 || chapter.hlsUrl.isNullOrBlank()
-                val displayName = if (locked) "$baseName (Locked)" else baseName
+                val displayName = baseName
 
                 newEpisode(
                     LoadData(
