@@ -59,8 +59,10 @@ class Flickreels : MainAPI() {
         val detail = fetchChapters(playletId)
         val episodes = detail?.list
             .orEmpty()
-            .distinctBy { it.chapterId }
-            .sortedBy { it.chapterNum ?: Int.MAX_VALUE }
+            .sortedWith(
+                compareBy<ChapterItem> { it.chapterNum ?: Int.MAX_VALUE }
+                    .thenBy { it.chapterId ?: "" }
+            )
             .mapIndexed { index, chapter ->
                 val number = chapter.chapterNum ?: (index + 1)
                 val baseName = chapter.chapterTitle?.takeIf { it.isNotBlank() } ?: "Episode $number"
