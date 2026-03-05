@@ -400,7 +400,7 @@ class NontonAnimeIDProvider : MainAPI() {
             } else {
                 null
             }
-            loadExtractor(nestedLink ?: link, "$mainUrl/", subtitleCallback, callback)
+            loadExtractor(nestedLink ?: link, data, subtitleCallback, callback)
         }
 
         return iframeLinks.isNotEmpty()

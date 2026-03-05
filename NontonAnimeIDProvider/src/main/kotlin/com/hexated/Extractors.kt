@@ -86,12 +86,12 @@ open class KotakAnimeidBase : ExtractorApi() {
         val response = app.get(url, referer = referer)
         val html = response.text
         val document = response.document
-        val origin = originOf(url)
-        val pageUrl = url
+        val referer = preferredKotakReferer(url)
+        val refererOrigin = originOf(referer)
 
         val sources = mutableListOf<ExtractorLink>()
-        sources.addAll(extractStreamSources(html, pageUrl, origin))
-        sources.addAll(extractScriptSources(document, pageUrl, origin))
+        sources.addAll(extractStreamSources(html, referer, refererOrigin))
+        sources.addAll(extractScriptSources(document, referer, refererOrigin))
 
         return sources.distinctBy { it.url }
     }
@@ -131,16 +131,16 @@ class Rpmvip : VidStack() {
 
 private suspend fun extractStreamSources(
     html: String,
-    pageUrl: String,
+    referer: String,
     origin: String
 ): List<ExtractorLink> {
     val urls = collectStreamUrls(html)
-    return buildLinksFromUrls(urls, pageUrl, origin)
+    return buildLinksFromUrls(urls, referer, origin)
 }
 
 private suspend fun extractScriptSources(
     document: org.jsoup.nodes.Document,
-    pageUrl: String,
+    referer: String,
     origin: String
 ): List<ExtractorLink> {
     val sources = mutableListOf<ExtractorLink>()
@@ -148,7 +148,7 @@ private suspend fun extractScriptSources(
         val data = script.data()
         if (data.contains("eval(function(p,a,c,k,e,d)")) {
             val unpacked = getAndUnpack(data)
-            sources.addAll(buildLinksFromUrls(collectStreamUrls(unpacked), pageUrl, origin))
+            sources.addAll(buildLinksFromUrls(collectStreamUrls(unpacked), referer, origin))
             val src = unpacked.substringAfter("sources:[").substringBefore("]")
             tryParseJson<List<ResponseSource>>("[$src]")?.forEach { source ->
                 sources.add(
@@ -158,9 +158,9 @@ private suspend fun extractScriptSources(
                         source.file,
                         INFER_TYPE
                     ) {
-                        this.referer = pageUrl
+                        this.referer = referer
                         this.headers = (headers ?: emptyMap()) + mapOf(
-                            "Referer" to pageUrl,
+                            "Referer" to referer,
                             "Origin" to origin,
                             "User-Agent" to USER_AGENT
                         )
@@ -169,7 +169,7 @@ private suspend fun extractScriptSources(
                 )
             }
         } else if (data.contains("\"sources\":[")) {
-            sources.addAll(buildLinksFromUrls(collectStreamUrls(data), pageUrl, origin))
+            sources.addAll(buildLinksFromUrls(collectStreamUrls(data), referer, origin))
             val src = data.substringAfter("\"sources\":[").substringBefore("]")
             tryParseJson<List<ResponseSource>>("[$src]")?.forEach { source ->
                 sources.add(
@@ -179,9 +179,9 @@ private suspend fun extractScriptSources(
                         source.file,
                         INFER_TYPE
                     ) {
-                        this.referer = pageUrl
+                        this.referer = referer
                         this.headers = (headers ?: emptyMap()) + mapOf(
-                            "Referer" to pageUrl,
+                            "Referer" to referer,
                             "Origin" to origin,
                             "User-Agent" to USER_AGENT
                         )
@@ -194,7 +194,7 @@ private suspend fun extractScriptSources(
                 )
             }
         } else {
-            sources.addAll(buildLinksFromUrls(collectStreamUrls(data), pageUrl, origin))
+            sources.addAll(buildLinksFromUrls(collectStreamUrls(data), referer, origin))
         }
     }
     return sources
@@ -222,7 +222,7 @@ private fun collectStreamUrls(text: String): List<String> {
 
 private suspend fun buildLinksFromUrls(
     urls: List<String>,
-    pageUrl: String,
+    referer: String,
     origin: String
 ): List<ExtractorLink> {
     if (urls.isEmpty()) return emptyList()
@@ -234,9 +234,9 @@ private suspend fun buildLinksFromUrls(
                 link,
                 INFER_TYPE
             ) {
-                this.referer = pageUrl
+                this.referer = referer
                 this.headers = (headers ?: emptyMap()) + mapOf(
-                    "Referer" to pageUrl,
+                    "Referer" to referer,
                     "Origin" to origin,
                     "User-Agent" to USER_AGENT
                 )
@@ -251,6 +251,15 @@ private fun normalizeUrl(url: String): String {
 private fun originOf(url: String): String {
     val parsed = URL(url)
     return "${parsed.protocol}://${parsed.host}"
+}
+
+private fun preferredKotakReferer(url: String): String {
+    val parsed = URL(url)
+    return if (parsed.host.endsWith("kotakanimeid.link")) {
+        "${parsed.protocol}://s1.kotakanimeid.link/"
+    } else {
+        "${parsed.protocol}://${parsed.host}/"
+    }
 }
 
 private data class ResponseSource(
