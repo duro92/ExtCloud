@@ -12,7 +12,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.net.URLEncoder
 
 class Reelshort : MainAPI() {
-    override var mainUrl = "https://reelshort.dramaview.web.id"
+    override var mainUrl = buildBaseUrl()
     override var name = "ReelShort💗"
     override var lang = "id"
     override val hasMainPage = true
@@ -28,7 +28,7 @@ class Reelshort : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         if (page > 1) return newHomePageResponse(request.name, emptyList())
 
-        val shelf = fetchShelf(request.data)
+        val shelf = fetchShelfWithFallback(request.data)
         val items = shelf?.books.orEmpty()
             .mapNotNull { it.toSearchResult() }
             .distinctBy { it.url }
@@ -48,9 +48,7 @@ class Reelshort : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val bookId = url.substringAfter("/book/").substringBefore("?").ifBlank {
-            url.substringAfterLast("/").substringBefore("?")
-        }
+        val bookId = extractBookId(url)
         if (bookId.isBlank()) throw ErrorLoadingException("ID tidak ditemukan")
 
         val filteredFromUrl = getQueryParam(url, "filtered_title")?.takeIf { it.isNotBlank() }
@@ -67,6 +65,8 @@ class Reelshort : MainAPI() {
             .toMap()
 
         val episodeItems = fetchEpisodes(bookId, filteredTitle)
+            .filter { (it.episode ?: 0) > 0 }
+            .distinctBy { it.episode to it.chapterId }
         val episodes = if (episodeItems.isNotEmpty()) {
             episodeItems
                 .sortedBy { it.episode ?: Int.MAX_VALUE }
@@ -106,7 +106,8 @@ class Reelshort : MainAPI() {
         val title = detail?.bookTitle?.takeIf { it.isNotBlank() }
             ?: "ReelShort"
 
-        return newTvSeriesLoadResponse(title, url, TvType.AsianDrama, episodes) {
+        val safeUrl = buildBookUrl(bookId, filteredTitle)
+        return newTvSeriesLoadResponse(title, safeUrl, TvType.AsianDrama, episodes) {
             posterUrl = detail?.bookPic
             plot = detail?.specialDesc
         }
@@ -156,6 +157,18 @@ class Reelshort : MainAPI() {
         return tryParseJson<ShelfResponse>(body)
     }
 
+    private suspend fun fetchShelfWithFallback(path: String): ShelfResponse? {
+        val primary = fetchShelf(path)
+        if (!primary?.books.isNullOrEmpty()) return primary
+
+        if (path.contains("/api/v1/reelshort/recommend", true)) {
+            val fallback = fetchShelf("/api/v1/reelshort/newrelease")
+            if (!fallback?.books.isNullOrEmpty()) return fallback
+        }
+
+        return primary
+    }
+
     private suspend fun fetchBookDetail(bookId: String): BookItem? {
         val paths = listOf(
             "/api/v1/reelshort/dramadub",
@@ -202,7 +215,7 @@ class Reelshort : MainAPI() {
 
     private fun buildBookUrl(bookId: String, filteredTitle: String?): String {
         val suffix = filteredTitle?.takeIf { it.isNotBlank() }?.let { "?filtered_title=$it" }.orEmpty()
-        return "$mainUrl/book/$bookId$suffix"
+        return "reelshort://book/$bookId$suffix"
     }
 
     private fun encodeQuery(value: String): String {
@@ -217,7 +230,27 @@ class Reelshort : MainAPI() {
             ?.substringAfter("=")
     }
 
+    private fun extractBookId(url: String): String {
+        return url.substringAfter("/book/").substringBefore("?").ifBlank {
+            url.substringAfter("reelshort://").substringBefore("?").substringBefore("/")
+        }.ifBlank {
+            url.substringAfterLast("/").substringBefore("?")
+        }
+    }
+
     private fun LoadData.toJsonData(): String = this.toJson()
+
+    private fun buildBaseUrl(): String {
+        val codes = intArrayOf(
+            104, 116, 116, 112, 115, 58, 47, 47,
+            114, 101, 101, 108, 115, 104, 111, 114, 116,
+            46, 100, 114, 97, 109, 97, 118, 105, 101, 119,
+            46, 119, 101, 98, 46, 105, 100
+        )
+        val sb = StringBuilder()
+        for (code in codes) sb.append(code.toChar())
+        return sb.toString()
+    }
 
     data class ShelfResponse(
         @JsonProperty("bookshelf_name") val shelfName: String? = null,
