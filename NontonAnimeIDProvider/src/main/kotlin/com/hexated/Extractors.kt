@@ -17,6 +17,8 @@ import com.lagradost.cloudstream3.utils.getAndUnpack
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.net.URL
+import java.net.URLDecoder
+import java.util.Base64
 
 open class Gdplayer : ExtractorApi() {
     override val name = "Gdplayer"
@@ -90,6 +92,7 @@ open class KotakAnimeidBase : ExtractorApi() {
         val refererOrigin = originOf(referer)
 
         val sources = mutableListOf<ExtractorLink>()
+        sources.addAll(buildLinksFromUrls(extractFromVidParam(url), referer, refererOrigin))
         sources.addAll(extractStreamSources(html, referer, refererOrigin))
         sources.addAll(extractScriptSources(document, referer, refererOrigin))
 
@@ -216,6 +219,40 @@ private fun collectStreamUrls(text: String): List<String> {
         )
     patternRelative.findAll(cleaned).forEach { match ->
         urls.add(normalizeUrl(match.value))
+    }
+    return urls.toList()
+}
+
+private fun extractFromVidParam(url: String): List<String> {
+    val vid = URL(url).query?.substringAfter("vid=", "")?.substringBefore("&").orEmpty()
+    if (vid.isBlank()) return emptyList()
+    val decoded = runCatching {
+        URLDecoder.decode(vid, "UTF-8")
+    }.getOrDefault(vid)
+    val candidates = mutableListOf<String>()
+
+    fun tryDecodeBase64(input: String): String? {
+        val cleaned = input.replace('-', '+').replace('_', '/')
+        val pad = (4 - (cleaned.length % 4)) % 4
+        val padded = cleaned + "=".repeat(pad)
+        return runCatching {
+            String(Base64.getDecoder().decode(padded))
+        }.getOrNull()
+    }
+
+    candidates.add(decoded)
+    tryDecodeBase64(decoded)?.let { candidates.add(it) }
+    tryDecodeBase64(decoded.replace("%3D", "="))?.let { candidates.add(it) }
+
+    val urls = LinkedHashSet<String>()
+    candidates.forEach { text ->
+        collectStreamUrls(text).forEach { urls.add(it) }
+        // If only path is present, try to reconstruct full URL
+        if (text.contains("season/") && text.contains(".m3u8")) {
+            val path = text.substringAfter("season/").substringBefore(".m3u8")
+            val rebuilt = "https://cdn2.kotakanimeid.link/season/$path.m3u8"
+            urls.add(rebuilt)
+        }
     }
     return urls.toList()
 }
