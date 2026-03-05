@@ -60,10 +60,13 @@ class Flickreels : MainAPI() {
             ?: throw ErrorLoadingException("Detail tidak ditemukan")
 
         val episodes = detail.list.orEmpty()
-            .filter { !it.hlsUrl.isNullOrBlank() }
             .sortedBy { it.chapterNum ?: Int.MAX_VALUE }
             .mapIndexed { index, chapter ->
                 val number = chapter.chapterNum ?: index + 1
+                val isLocked = chapter.isLock == 1 || chapter.hlsUrl.isNullOrBlank()
+                val baseName = chapter.chapterTitle?.takeIf { it.isNotBlank() } ?: "Episode $number"
+                val displayName = if (isLocked) "$baseName (Locked)" else baseName
+
                 newEpisode(
                     LoadData(
                         playletId = playletId,
@@ -72,7 +75,7 @@ class Flickreels : MainAPI() {
                         episode = number
                     ).toJsonData()
                 ) {
-                    name = chapter.chapterTitle?.takeIf { it.isNotBlank() } ?: "Episode $number"
+                    name = displayName
                     this.episode = number
                     posterUrl = chapter.chapterCover
                 }
