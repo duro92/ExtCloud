@@ -13,7 +13,7 @@ import java.net.URLEncoder
 
 class Goodshort : MainAPI() {
     override var mainUrl = buildBaseUrl()
-    override var name = "GoodShort"
+    override var name = "GoodShort🍂"
     override var lang = "id"
     override val hasMainPage = true
     override val hasQuickSearch = true
