@@ -226,8 +226,13 @@ private suspend fun buildLinksFromUrls(
     origin: String
 ): List<ExtractorLink> {
     if (urls.isEmpty()) return emptyList()
-    return urls
-        .map { link ->
+    val hasHls = urls.any { it.contains(".m3u8", ignoreCase = true) }
+    val filtered = if (hasHls) {
+        urls.filter { it.contains(".m3u8", ignoreCase = true) }
+    } else {
+        urls
+    }
+    return filtered.map { link ->
             newExtractorLink(
                 "KotakAnimeid",
                 "KotakAnimeid",

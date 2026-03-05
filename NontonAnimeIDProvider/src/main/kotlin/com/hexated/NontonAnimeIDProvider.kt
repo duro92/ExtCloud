@@ -366,11 +366,14 @@ class NontonAnimeIDProvider : MainAPI() {
             ?.getOrNull(1)
 
         if (!nonce.isNullOrBlank()) {
-            document.select(".serverplayer[data-post][data-type][data-nume], .container1 > ul > li[data-post][data-type][data-nume]")
-                .forEach { serverItem ->
+            document.select(
+                ".serverplayer[data-post][data-type][data-nume], " +
+                    ".container1 > ul > li[data-post][data-type][data-nume], " +
+                    "[data-post][data-type][data-nume]"
+            ).forEach { serverItem ->
                     val dataPost = serverItem.attr("data-post")
                     val dataNume = serverItem.attr("data-nume")
-                    val serverName = serverItem.attr("data-type").lowercase()
+                    val serverName = serverItem.attr("data-type").trim()
                     if (dataPost.isBlank() || dataNume.isBlank() || serverName.isBlank()) return@forEach
 
                     val response = app.post(
