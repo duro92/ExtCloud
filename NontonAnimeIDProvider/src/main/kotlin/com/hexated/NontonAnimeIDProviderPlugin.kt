@@ -16,6 +16,7 @@ class NontonAnimeIDProviderPlugin: Plugin() {
         registerExtractorAPI(KotakAnimeidLink())
         registerExtractorAPI(Gdplayer())
         registerExtractorAPI(Kotaksb())
+        registerExtractorAPI(Gdriveplayerto())
         registerExtractorAPI(Vidhidepre())
         registerExtractorAPI(Rpmvip())
     }
