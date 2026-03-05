@@ -85,7 +85,11 @@ open class KotakAnimeidBase : ExtractorApi() {
     override val requiresReferer = true
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val response = app.get(url, referer = referer)
+        val response = app.get(
+            url,
+            referer = referer,
+            headers = mapOf("User-Agent" to USER_AGENT)
+        )
         val html = response.text
         val document = response.document
         val referer = preferredKotakReferer(url)
@@ -126,6 +130,20 @@ class Gdriveplayerto : ExtractorApi() {
         val html = response.text
         val document = response.document
 
+        val ids = Regex("""\b(?:var|let|const)\s+ids\s*=\s*["']([^"']+)["']""")
+            .find(html)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?: Regex("""list_([a-f0-9]{16,64})""", RegexOption.IGNORE_CASE)
+                .find(html)
+                ?.groupValues
+                ?.getOrNull(1)
+        val setCookie = response.headers["Set-Cookie"] ?: response.headers["set-cookie"]
+        val cookieHeader = ids?.let { "newaccess=$it" }
+            ?: setCookie
+                ?.substringBefore(";")
+                ?.takeIf { it.startsWith("newaccess=") }
+
         val token = document.selectFirst("#token")?.text()?.trim()
             ?.ifBlank { null }
             ?: Regex("""id=["']token["'][^>]*>\s*([A-Za-z0-9+/=]+)\s*<""")
@@ -136,19 +154,31 @@ class Gdriveplayerto : ExtractorApi() {
         val playlistUrl = when {
             !token.isNullOrBlank() -> "$mainUrl/hlsplaylist.php?s=$token"
             else -> findFirstUrl(html, "hlsplaylist.php")?.let { normalizeUrl(it, mainUrl) }
+                ?: findFirstUrl(html, "hlsnew2.php")?.let { normalizeUrl(it, mainUrl) }
         } ?: return
+
+        val commonHeaders = mapOf(
+            "Referer" to mainUrl,
+            "Origin" to mainUrl,
+            "User-Agent" to USER_AGENT
+        ) + (cookieHeader?.let { mapOf("Cookie" to it) } ?: emptyMap())
 
         val playlistText = app.get(
             playlistUrl,
             referer = url,
-            headers = mapOf(
-                "Origin" to mainUrl,
-                "User-Agent" to USER_AGENT
-            )
+            headers = commonHeaders
         ).text
 
         val variants = parseM3u8(playlistText, playlistUrl, name)
-        if (variants.isEmpty()) {
+        val fallbackVariants = if (variants.isEmpty()) {
+            extractHlsNew2Variants(playlistText, playlistUrl, name)
+        } else {
+            emptyList()
+        }
+
+        val finalVariants = if (variants.isNotEmpty()) variants else fallbackVariants
+
+        if (finalVariants.isEmpty()) {
             callback.invoke(
                 newExtractorLink(
                     name,
@@ -157,17 +187,13 @@ class Gdriveplayerto : ExtractorApi() {
                     INFER_TYPE
                 ) {
                     this.referer = mainUrl
-                    this.headers = mapOf(
-                        "Referer" to mainUrl,
-                        "Origin" to mainUrl,
-                        "User-Agent" to USER_AGENT
-                    )
+                    this.headers = commonHeaders
                 }
             )
             return
         }
 
-        variants.forEach { variant ->
+        finalVariants.forEach { variant ->
             callback.invoke(
                 newExtractorLink(
                     name,
@@ -177,11 +203,7 @@ class Gdriveplayerto : ExtractorApi() {
                 ) {
                     this.referer = mainUrl
                     this.quality = variant.quality
-                    this.headers = mapOf(
-                        "Referer" to mainUrl,
-                        "Origin" to mainUrl,
-                        "User-Agent" to USER_AGENT
-                    )
+                    this.headers = commonHeaders
                 }
             )
         }
@@ -310,7 +332,11 @@ private fun findFirstUrl(html: String, needle: String): String? {
 }
 
 private fun normalizeUrl(url: String, base: String): String {
-    return if (url.startsWith("http")) url else base.trimEnd('/') + "/" + url.trimStart('/')
+    return when {
+        url.startsWith("http") -> url
+        url.startsWith("//") -> "https:$url"
+        else -> base.trimEnd('/') + "/" + url.trimStart('/')
+    }
 }
 
 private data class M3u8Variant(
@@ -320,11 +346,15 @@ private data class M3u8Variant(
 )
 
 private fun parseM3u8(playlist: String, baseUrl: String, sourceName: String): List<M3u8Variant> {
-    val lines = playlist.lineSequence()
+    val normalized = playlist.replace("\r\n", "\n").replace("\r", "\n")
+    val lines = normalized.lineSequence()
         .map { it.trim() }
         .filter { it.isNotBlank() }
         .toList()
     if (lines.isEmpty()) return emptyList()
+
+    val isMaster = lines.any { it.startsWith("#EXT-X-STREAM-INF") }
+    if (!isMaster) return emptyList()
 
     val variants = mutableListOf<M3u8Variant>()
     var pendingQuality: Int? = null
@@ -332,6 +362,8 @@ private fun parseM3u8(playlist: String, baseUrl: String, sourceName: String): Li
     fun buildUrl(line: String): String {
         return if (line.startsWith("http")) {
             line
+        } else if (line.startsWith("//")) {
+            "https:$line"
         } else {
             val base = baseUrl.substringBeforeLast("/") + "/"
             base + line.trimStart('/')
@@ -366,6 +398,29 @@ private fun parseM3u8(playlist: String, baseUrl: String, sourceName: String): Li
     if (variants.isNotEmpty()) return variants
 
     val urls = collectStreamUrls(playlist).map { normalizeUrl(it, baseUrl) }
+    return urls.map { url ->
+        val quality = extractQualityFromUrl(url) ?: Qualities.Unknown.value
+        val label = if (quality == Qualities.Unknown.value) sourceName else "$sourceName ${quality}p"
+        M3u8Variant(url, quality, label)
+    }
+}
+
+private fun extractHlsNew2Variants(
+    playlist: String,
+    baseUrl: String,
+    sourceName: String
+): List<M3u8Variant> {
+    val matches = Regex("""hlsnew2\.php\?[^\\s"']+""", RegexOption.IGNORE_CASE)
+        .findAll(playlist)
+        .map { it.value }
+        .toList()
+    if (matches.isEmpty()) return emptyList()
+
+    val base = originOf(baseUrl)
+    val urls = matches
+        .map { normalizeUrl(it, base) }
+        .distinct()
+
     return urls.map { url ->
         val quality = extractQualityFromUrl(url) ?: Qualities.Unknown.value
         val label = if (quality == Qualities.Unknown.value) sourceName else "$sourceName ${quality}p"
