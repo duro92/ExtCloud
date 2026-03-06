@@ -671,11 +671,13 @@ open class EmturbovidExtractor : ExtractorApi() {
         val masterUrl = runCatching { URI(page.url).resolve(masterCandidate.trim()).toString() }
             .getOrElse { masterCandidate.trim() }
 
-        val pageBase = getBaseUrl(page.url) ?: mainUrl
+        val pageUrl = page.url
+        val pageBase = getBaseUrl(pageUrl) ?: mainUrl
         val hlsBase = pickHlsBase(pageBase, masterUrl)
+        val hlsReferer = pageUrl.takeIf { it.isNotBlank() } ?: "$hlsBase/"
 
         val headers = mapOf(
-            "Referer" to "$hlsBase/",
+            "Referer" to hlsReferer,
             "Origin" to hlsBase,
             "User-Agent" to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
             "Accept" to "*/*"
@@ -711,7 +713,7 @@ open class EmturbovidExtractor : ExtractorApi() {
                     url = variantUrl,
                     type = ExtractorLinkType.M3U8
                 ) {
-                    this.referer = "$hlsBase/"
+                    this.referer = hlsReferer
                     this.headers = headers
                     this.quality = q
                 }
@@ -725,7 +727,7 @@ open class EmturbovidExtractor : ExtractorApi() {
                 url = masterUrl,
                 type = ExtractorLinkType.M3U8
             ) {
-                this.referer = "$hlsBase/"
+                this.referer = hlsReferer
                 this.headers = headers
                 this.quality = Qualities.Unknown.value
             }
