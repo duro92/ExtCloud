@@ -617,7 +617,14 @@ open class EmturbovidExtractor : ExtractorApi() {
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val ref = referer ?: "$mainUrl/"
 
-        val page = app.get(url, referer = ref)
+        val page = app.get(
+            url,
+            referer = ref,
+            headers = mapOf(
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+                "Accept" to "*/*"
+            )
+        )
         val pageBase = getBaseUrl(page.url) ?: mainUrl
 
         val headers = mapOf(
@@ -630,6 +637,8 @@ open class EmturbovidExtractor : ExtractorApi() {
         val dataHash = page.document.selectFirst("#video_player")?.attr("data-hash")
             ?.takeIf { it.isNotBlank() }
             ?: page.document.selectFirst("[data-hash]")?.attr("data-hash")?.takeIf { it.isNotBlank() }
+            ?: Regex("""data-hash\s*=\s*['"]([^'"]+)""", RegexOption.IGNORE_CASE)
+                .find(page.text)?.groupValues?.getOrNull(1)
 
         val masterCandidate = dataHash
             ?: Regex("""var\s+urlPlay\s*=\s*['"]([^'"]+)""", RegexOption.IGNORE_CASE)
@@ -640,39 +649,40 @@ open class EmturbovidExtractor : ExtractorApi() {
         val masterUrl = runCatching { URI(page.url).resolve(masterCandidate.trim()).toString() }
             .getOrElse { masterCandidate.trim() }
 
-        val masterText = app.get(masterUrl, headers = headers).text
-        val lines = masterText.lines()
-
         val out = mutableListOf<ExtractorLink>()
 
-        for (i in 0 until lines.size) {
-            val line = lines[i].trim()
-            if (!line.startsWith("#EXT-X-STREAM-INF")) continue
+        val masterText = runCatching { app.get(masterUrl, headers = headers).text }.getOrNull()
+        if (!masterText.isNullOrBlank()) {
+            val lines = masterText.lines()
+            for (i in 0 until lines.size) {
+                val line = lines[i].trim()
+                if (!line.startsWith("#EXT-X-STREAM-INF")) continue
 
-            val height = Regex("RESOLUTION=\\d+x(\\d+)")
-                .find(line)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?.toIntOrNull()
+                val height = Regex("RESOLUTION=\\d+x(\\d+)")
+                    .find(line)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    ?.toIntOrNull()
 
-            val next = lines.getOrNull(i + 1)?.trim().orEmpty()
-            if (next.isBlank() || next.startsWith("#")) continue
+                val next = lines.getOrNull(i + 1)?.trim().orEmpty()
+                if (next.isBlank() || next.startsWith("#")) continue
 
-            val variantUrl = runCatching { URI(masterUrl).resolve(next).toString() }
-                .getOrNull()
-                ?: continue
+                val variantUrl = runCatching { URI(masterUrl).resolve(next).toString() }
+                    .getOrNull()
+                    ?: continue
 
-            val q = height ?: Qualities.Unknown.value
+                val q = height ?: Qualities.Unknown.value
 
-            out += newExtractorLink(
-                source = name,
-                name = name,
-                url = variantUrl,
-                type = ExtractorLinkType.M3U8
-            ) {
-                this.referer = "$pageBase/"
-                this.headers = headers
-                this.quality = q
+                out += newExtractorLink(
+                    source = name,
+                    name = name,
+                    url = variantUrl,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = "$pageBase/"
+                    this.headers = headers
+                    this.quality = q
+                }
             }
         }
 
