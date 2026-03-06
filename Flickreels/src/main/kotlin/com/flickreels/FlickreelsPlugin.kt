@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 @CloudstreamPlugin
 class FlickreelsPlugin : Plugin() {
     override fun load(context: Context) {
+        Flickreels.context = context
         registerMainAPI(Flickreels())
     }
 }

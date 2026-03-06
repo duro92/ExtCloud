@@ -25,6 +25,9 @@ private const val KISSKH_SUB_API =
     "https://script.google.com/macros/s/AKfycbyq6hTj0ZhlinYC6xbggtgo166tp6XaDKBCGtnYk8uOfYBUFwwxBui0sGXiu_zIFmA/exec?id="
 
 class KisskhProvider : MainAPI() {
+    companion object {
+        var context: android.content.Context? = null
+    }
     override var mainUrl = "https://kisskh.ovh"
     override var name = "Kisskh🍂"
     override val hasMainPage = true
@@ -50,6 +53,7 @@ class KisskhProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        context?.let { StarPopupHelper.showStarPopupIfNeeded(it) }
         val home = app.get("$mainUrl/api/DramaList/List?page=$page${request.data}")
             .parsedSafe<Responses>()?.data
             ?.mapNotNull { media -> media.toSearchResponse() }

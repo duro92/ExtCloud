@@ -12,6 +12,9 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.net.URLEncoder
 
 class Goodshort : MainAPI() {
+    companion object {
+        var context: android.content.Context? = null
+    }
     override var mainUrl = buildBaseUrl()
     override var name = "GoodShort🍂"
     override var lang = "id"
@@ -24,6 +27,7 @@ class Goodshort : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        context?.let { StarPopupHelper.showStarPopupIfNeeded(it) }
         val items = fetchHome(request.data, page)
             .distinctBy { it.bookId }
             .mapNotNull { it.toSearchResult() }

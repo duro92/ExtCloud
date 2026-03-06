@@ -37,6 +37,8 @@ class NontonAnimeIDProvider : MainAPI() {
             }
         }
 
+        var context: android.content.Context? = null
+
         fun getStatus(t: String): ShowStatus {
             return when (t) {
                 "Finished Airing" -> ShowStatus.Completed
@@ -52,6 +54,7 @@ class NontonAnimeIDProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        context?.let { StarPopupHelper.showStarPopupIfNeeded(it) }
         val pageUrl = if (page == 1) {
             request.data
         } else {

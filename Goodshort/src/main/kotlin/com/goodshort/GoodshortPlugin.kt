@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 @CloudstreamPlugin
 class GoodshortPlugin : Plugin() {
     override fun load(context: Context) {
+        Goodshort.context = context
         registerMainAPI(Goodshort())
     }
 }

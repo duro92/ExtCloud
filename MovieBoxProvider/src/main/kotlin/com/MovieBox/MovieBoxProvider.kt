@@ -47,6 +47,9 @@ import javax.crypto.spec.SecretKeySpec
 import kotlin.math.max
 
 class MovieBoxProvider : MainAPI() {
+    companion object {
+        var context: android.content.Context? = null
+    }
     override var mainUrl = "https://api3.aoneroom.com"
     override var name = "Moviebox🥑"
     override val hasMainPage = true
@@ -176,6 +179,7 @@ class MovieBoxProvider : MainAPI() {
         )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        context?.let { StarPopupHelper.showStarPopupIfNeeded(it) }
         val perPage = 15
         val url = if (request.data.contains("|")) "$mainUrl/wefeed-mobile-bff/subject-api/list" else "$mainUrl/wefeed-mobile-bff/tab/ranking-list?tabId=0&categoryType=${request.data}&page=$page&perPage=$perPage"
 

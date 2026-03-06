@@ -14,6 +14,9 @@ import java.net.URLEncoder
 
 
 class Midasxxi : MainAPI() {
+    companion object {
+        var context: android.content.Context? = null
+    }
     override var mainUrl = "https://ssstik.tv"
     private var directUrl = mainUrl
     override var name = "MidasXXI🙈"
@@ -40,6 +43,7 @@ class Midasxxi : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
+        context?.let { StarPopupHelper.showStarPopupIfNeeded(it) }
         val base = request.data.trimEnd('/')
         val target = if (page <= 1) "$base/" else "$base/page/$page/"
         val req = app.get(target)

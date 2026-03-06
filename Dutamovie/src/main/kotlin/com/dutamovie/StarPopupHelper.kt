@@ -1,12 +1,14 @@
 package com.dutamovie
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Context
-import android.content.Intent
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
+import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -15,7 +17,6 @@ import android.view.Gravity
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.app.AlertDialog
 
 object StarPopupHelper {
 
@@ -69,10 +70,30 @@ object StarPopupHelper {
             setTextColor(Color.parseColor("#b0b0b0"))
             textSize = 15f
             gravity = Gravity.CENTER
-            setPadding(0, 0, 0, dp(24, activity))
+            setPadding(0, 0, 0, dp(16, activity))
             setLineSpacing(dp(4, activity).toFloat(), 1f)
         }
         layout.addView(messageView)
+
+        // ===== SAWERIA TEXT =====
+        val saweriaView = TextView(activity).apply {
+            text = "Dukung kami di: https://saweria.co/duro92"
+            setTextColor(Color.parseColor("#74b9ff"))
+            textSize = 14f
+            gravity = Gravity.CENTER
+            paintFlags = paintFlags or Paint.UNDERLINE_TEXT_FLAG
+            setPadding(0, 0, 0, dp(24, activity))
+
+            setOnClickListener {
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://saweria.co/duro92"))
+                    activity.startActivity(intent)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error opening Saweria link: ${e.message}")
+                }
+            }
+        }
+        layout.addView(saweriaView)
 
         // ===== BUTTON =====
         val button = Button(activity).apply {

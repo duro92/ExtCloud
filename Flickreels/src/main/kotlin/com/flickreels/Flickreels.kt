@@ -11,6 +11,9 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class Flickreels : MainAPI() {
+    companion object {
+        var context: android.content.Context? = null
+    }
     override var mainUrl = buildBaseUrl()
     override var name = "FlickReels😘"
     override var lang = "id"
@@ -24,6 +27,7 @@ class Flickreels : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        context?.let { StarPopupHelper.showStarPopupIfNeeded(it) }
         val items = when (request.data) {
             "foryou" -> fetchForYou(page)
             "rank" -> if (page == 1) fetchRank() else emptyList()

@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 @CloudstreamPlugin
 class ReelshortPlugin : Plugin() {
     override fun load(context: Context) {
+        Reelshort.context = context
         registerMainAPI(Reelshort())
     }
 }

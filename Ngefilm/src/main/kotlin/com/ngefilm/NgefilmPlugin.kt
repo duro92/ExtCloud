@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 @CloudstreamPlugin
 class NgefilmPlugin : Plugin() {
     override fun load(context: Context) {
+        Ngefilm.context = context
         registerMainAPI(Ngefilm())
         registerExtractorAPI(Dingtezuni())
         registerExtractorAPI(Bingezove())

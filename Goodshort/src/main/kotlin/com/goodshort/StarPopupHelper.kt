@@ -1,4 +1,4 @@
-package com.hexated
+package com.goodshort
 
 import android.app.Activity
 import android.app.AlertDialog

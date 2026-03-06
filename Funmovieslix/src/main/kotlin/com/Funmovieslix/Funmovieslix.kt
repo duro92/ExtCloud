@@ -27,6 +27,9 @@ import org.jsoup.nodes.Element
 
 
 class Funmovieslix : MainAPI() {
+    companion object {
+        var context: android.content.Context? = null
+    }
     override var mainUrl = "https://funmovieslix.com"
     override var name = "Funmovieslix🎥"
     override val hasMainPage = true
@@ -49,6 +52,7 @@ class Funmovieslix : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+    context?.let { StarPopupHelper.showStarPopupIfNeeded(it) }
     val document = if (request.data == "latest-updates") {
         val url = if (page == 1)
             "$mainUrl/latest-updates/"

@@ -8,6 +8,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 @CloudstreamPlugin
 class LayarasiaPlugin : Plugin() {
     override fun load(context: Context) {
+        Layarasia.context = context
         registerMainAPI(Layarasia())
         registerExtractorAPI(Smoothpre())
         registerExtractorAPI(EmturbovidExtractor())

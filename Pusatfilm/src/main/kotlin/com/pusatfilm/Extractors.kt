@@ -606,92 +606,66 @@ open class EmturbovidExtractor : ExtractorApi() {
     override var mainUrl = "https://emturbovid.com"
     override val requiresReferer = true
 
-    private fun getBaseUrl(url: String?): String? = runCatching {
-        if (url.isNullOrBlank()) return@runCatching null
-        val u = URI(url)
-        val scheme = u.scheme ?: return@runCatching null
-        val host = u.host ?: return@runCatching null
-        "$scheme://$host"
-    }.getOrNull()
-
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val ref = referer ?: "$mainUrl/"
 
-        val pageHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-            "Accept" to "*/*"
-        )
-
-        fun extractMasterCandidate(html: String, doc: org.jsoup.nodes.Document): String? {
-            val dataHash = doc.selectFirst("#video_player")?.attr("data-hash")
-                ?.takeIf { it.isNotBlank() }
-                ?: doc.selectFirst("[data-hash]")?.attr("data-hash")?.takeIf { it.isNotBlank() }
-                ?: Regex("""data-hash\s*=\s*['"]([^'"]+)""", RegexOption.IGNORE_CASE)
-                    .find(html)?.groupValues?.getOrNull(1)
-
-            return dataHash
-                ?: Regex("""var\s+urlPlay\s*=\s*['"]([^'"]+)""", RegexOption.IGNORE_CASE)
-                    .find(html)?.groupValues?.getOrNull(1)
-        }
-
-        var page = app.get(url, referer = ref, headers = pageHeaders)
-        var masterCandidate = extractMasterCandidate(page.text, page.document)
-
-        // Some hosts expect a specific embed referer (e.g., kotakajaib.me). Retry once if empty.
-        if (masterCandidate.isNullOrBlank() && !ref.contains("kotakajaib.me", ignoreCase = true)) {
-            val fallbackRef = "https://kotakajaib.me/"
-            page = app.get(url, referer = fallbackRef, headers = pageHeaders)
-            masterCandidate = extractMasterCandidate(page.text, page.document)
-        }
-
-        if (masterCandidate.isNullOrBlank()) return null
-
-        val pageBase = getBaseUrl(page.url) ?: mainUrl
-
         val headers = mapOf(
-            "Referer" to "$pageBase/",
-            "Origin" to pageBase,
+            "Referer" to "$mainUrl/",
+            "Origin" to mainUrl,
             "User-Agent" to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
             "Accept" to "*/*"
         )
 
-        val masterUrl = runCatching { URI(page.url).resolve(masterCandidate.trim()).toString() }
-            .getOrElse { masterCandidate.trim() }
+        val page = app.get(url, referer = ref)
+
+        val playerScript = page.document
+            .selectXpath("//script[contains(text(),'var urlPlay')]")
+            .html()
+
+        if (playerScript.isBlank()) return null
+
+        var masterUrl = playerScript
+            .substringAfter("var urlPlay = '")
+            .substringBefore("'")
+            .trim()
+
+    
+        if (masterUrl.startsWith("//")) masterUrl = "https:$masterUrl"
+        if (masterUrl.startsWith("/")) masterUrl = mainUrl + masterUrl
+
+        val masterText = app.get(masterUrl, headers = headers).text
+        val lines = masterText.lines()
 
         val out = mutableListOf<ExtractorLink>()
 
-        val masterText = runCatching { app.get(masterUrl, headers = headers).text }.getOrNull()
-        if (!masterText.isNullOrBlank()) {
-            val lines = masterText.lines()
-            for (i in 0 until lines.size) {
-                val line = lines[i].trim()
-                if (!line.startsWith("#EXT-X-STREAM-INF")) continue
+        for (i in 0 until lines.size) {
+            val line = lines[i].trim()
+            if (!line.startsWith("#EXT-X-STREAM-INF")) continue
 
-                val height = Regex("RESOLUTION=\\d+x(\\d+)")
-                    .find(line)
-                    ?.groupValues
-                    ?.getOrNull(1)
-                    ?.toIntOrNull()
+            val height = Regex("RESOLUTION=\\d+x(\\d+)")
+                .find(line)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toIntOrNull()
 
-                val next = lines.getOrNull(i + 1)?.trim().orEmpty()
-                if (next.isBlank() || next.startsWith("#")) continue
+            val next = lines.getOrNull(i + 1)?.trim().orEmpty()
+            if (next.isBlank() || next.startsWith("#")) continue
 
-                val variantUrl = runCatching { URI(masterUrl).resolve(next).toString() }
-                    .getOrNull()
-                    ?: continue
+            var variantUrl = next
+            if (variantUrl.startsWith("//")) variantUrl = "https:$variantUrl"
+            else if (variantUrl.startsWith("/")) variantUrl = mainUrl + variantUrl
 
-                val q = height ?: Qualities.Unknown.value
+            val q = height ?: Qualities.Unknown.value
 
-                out += newExtractorLink(
-                    source = name,
-                    name = name,
-                    url = variantUrl,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = "$pageBase/"
-                    this.headers = headers
-                    this.quality = q
-                }
+            out += newExtractorLink(
+                source = name,
+                name = name,
+                url = variantUrl,
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = "$mainUrl/"
+                this.headers = headers
+                this.quality = q
             }
         }
 
@@ -702,7 +676,7 @@ open class EmturbovidExtractor : ExtractorApi() {
                 url = masterUrl,
                 type = ExtractorLinkType.M3U8
             ) {
-                this.referer = "$pageBase/"
+                this.referer = "$mainUrl/"
                 this.headers = headers
                 this.quality = Qualities.Unknown.value
             }

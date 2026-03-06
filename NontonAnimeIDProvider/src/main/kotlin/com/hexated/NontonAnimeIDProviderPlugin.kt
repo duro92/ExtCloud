@@ -8,6 +8,7 @@ import android.content.Context
 @CloudstreamPlugin
 class NontonAnimeIDProviderPlugin: Plugin() {
     override fun load(context: Context) {
+        NontonAnimeIDProvider.context = context
         // All providers should be added in this manner. Please don't edit the providers list directly.
         registerMainAPI(NontonAnimeIDProvider())
         registerExtractorAPI(Nontonanimeid())

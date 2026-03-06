@@ -12,6 +12,9 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.net.URLEncoder
 
 class Reelshort : MainAPI() {
+    companion object {
+        var context: android.content.Context? = null
+    }
     override var mainUrl = buildBaseUrl()
     override var name = "ReelShort💗"
     override var lang = "id"
@@ -26,6 +29,7 @@ class Reelshort : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        context?.let { StarPopupHelper.showStarPopupIfNeeded(it) }
         if (page > 1) return newHomePageResponse(request.name, emptyList())
 
         val shelf = fetchShelfWithFallback(request.data)

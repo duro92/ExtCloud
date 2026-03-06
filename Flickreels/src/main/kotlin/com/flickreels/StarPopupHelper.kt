@@ -1,4 +1,4 @@
-package com.hexated
+package com.flickreels
 
 import android.app.Activity
 import android.app.AlertDialog
