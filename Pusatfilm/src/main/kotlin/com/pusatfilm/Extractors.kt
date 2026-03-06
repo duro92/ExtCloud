@@ -616,124 +616,115 @@ open class EmturbovidExtractor : ExtractorApi() {
     override var mainUrl = "https://emturbovid.com"
     override val requiresReferer = true
 
+    private val mobileUa =
+        "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+
     private fun getBaseUrl(url: String?): String? = runCatching {
         if (url.isNullOrBlank()) return@runCatching null
         val u = URI(url)
         val scheme = u.scheme ?: return@runCatching null
         val host = u.host ?: return@runCatching null
-        "$scheme://$host"
+        val port = if (u.port != -1) ":${u.port}" else ""
+        "$scheme://$host$port"
     }.getOrNull()
 
-    private fun pickHlsBase(pageBase: String, masterUrl: String): String {
-        val host = runCatching { URI(masterUrl).host.orEmpty() }.getOrElse { "" }
-        val looksLikeTurboHost = host.contains("turbosplayer", true) ||
-            host.contains("turboviplay", true) ||
-            host.contains("turbovidhls", true)
-        return if (pageBase.contains("emturbovid.com", true) && looksLikeTurboHost) {
-            "https://turbovidhls.com"
-        } else {
-            pageBase
+    private fun normalizeReferer(base: String?): String? {
+        if (base.isNullOrBlank()) return null
+        return if (base.endsWith("/")) base else "$base/"
+    }
+
+    private fun isTurboHost(host: String?): Boolean {
+        if (host.isNullOrBlank()) return false
+        return host.contains("turbosplayer", ignoreCase = true) ||
+            host.contains("turboviplay", ignoreCase = true) ||
+            host.contains("turbovidhls", ignoreCase = true)
+    }
+
+    private fun resolvePlaybackBase(pageUrl: String, masterUrl: String): String {
+        val masterBase = getBaseUrl(masterUrl)
+        val pageBase = getBaseUrl(pageUrl)
+
+        val masterHost = runCatching { URI(masterUrl).host }.getOrNull()
+        val pageHost = runCatching { URI(pageUrl).host }.getOrNull()
+
+        return when {
+            isTurboHost(masterHost) && !masterBase.isNullOrBlank() -> masterBase
+            isTurboHost(pageHost) && !pageBase.isNullOrBlank() -> pageBase
+            !masterBase.isNullOrBlank() -> masterBase
+            !pageBase.isNullOrBlank() -> pageBase
+            else -> mainUrl
         }
     }
 
+    private fun extractMasterCandidate(html: String, doc: org.jsoup.nodes.Document): String? {
+        return doc.selectFirst("#video_player")?.attr("data-hash")
+            ?.takeIf { it.isNotBlank() }
+            ?: doc.selectFirst("[data-hash]")?.attr("data-hash")?.takeIf { it.isNotBlank() }
+            ?: Regex("""data-hash\s*=\s*['"]([^'"]+)['"]""", RegexOption.IGNORE_CASE)
+                .find(html)?.groupValues?.getOrNull(1)
+            ?: Regex("""var\s+urlPlay\s*=\s*['"]([^'"]+)['"]""", RegexOption.IGNORE_CASE)
+                .find(html)?.groupValues?.getOrNull(1)
+            ?: Regex("""["']file["']\s*:\s*["']([^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE)
+                .find(html)?.groupValues?.getOrNull(1)
+            ?: Regex("""["']src["']\s*:\s*["']([^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE)
+                .find(html)?.groupValues?.getOrNull(1)
+    }
+
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val ref = referer ?: "$mainUrl/"
+        val initialRef = referer ?: "$mainUrl/"
 
         val pageHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+            "User-Agent" to mobileUa,
             "Accept" to "*/*"
         )
 
-        fun extractMasterCandidate(html: String, doc: org.jsoup.nodes.Document): String? {
-            val dataHash = doc.selectFirst("#video_player")?.attr("data-hash")
-                ?.takeIf { it.isNotBlank() }
-                ?: doc.selectFirst("[data-hash]")?.attr("data-hash")?.takeIf { it.isNotBlank() }
-                ?: Regex("""data-hash\s*=\s*['"]([^'"]+)""", RegexOption.IGNORE_CASE)
-                    .find(html)?.groupValues?.getOrNull(1)
+        var page = runCatching {
+            app.get(url, referer = initialRef, headers = pageHeaders)
+        }.getOrNull() ?: return null
 
-            return dataHash
-                ?: Regex("""var\s+urlPlay\s*=\s*['"]([^'"]+)""", RegexOption.IGNORE_CASE)
-                    .find(html)?.groupValues?.getOrNull(1)
-        }
-
-        var page = app.get(url, referer = ref, headers = pageHeaders)
         var masterCandidate = extractMasterCandidate(page.text, page.document)
 
-        // Some hosts expect a specific embed referer (e.g., kotakajaib.me). Retry once if empty.
-        if (masterCandidate.isNullOrBlank() && !ref.contains("kotakajaib.me", ignoreCase = true)) {
+        // Beberapa mirror hanya mau kebaca jika embed dibuka dari referer tertentu.
+        if (masterCandidate.isNullOrBlank() && !initialRef.contains("kotakajaib.me", ignoreCase = true)) {
             val fallbackRef = "https://kotakajaib.me/"
-            page = app.get(url, referer = fallbackRef, headers = pageHeaders)
+            page = runCatching {
+                app.get(url, referer = fallbackRef, headers = pageHeaders)
+            }.getOrNull() ?: page
+
             masterCandidate = extractMasterCandidate(page.text, page.document)
         }
 
         if (masterCandidate.isNullOrBlank()) return null
 
-        val masterUrl = runCatching { URI(page.url).resolve(masterCandidate.trim()).toString() }
-            .getOrElse { masterCandidate.trim() }
+        val masterUrl = runCatching {
+            URI(page.url).resolve(masterCandidate.trim()).toString()
+        }.getOrElse {
+            masterCandidate.trim()
+        }
 
-        val pageUrl = page.url
-        val pageBase = getBaseUrl(pageUrl) ?: mainUrl
-        val hlsBase = pickHlsBase(pageBase, masterUrl)
-        val hlsReferer = pageUrl.takeIf { it.isNotBlank() } ?: "$hlsBase/"
+        val playbackBase = resolvePlaybackBase(page.url, masterUrl)
+        val playbackReferer = normalizeReferer(playbackBase) ?: "$mainUrl/"
 
-        val headers = mapOf(
-            "Referer" to hlsReferer,
-            "Origin" to hlsBase,
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+        // Header dibuat konsisten: referer dan origin berasal dari origin yang sama.
+        val streamHeaders = linkedMapOf(
+            "Referer" to playbackReferer,
+            "Origin" to playbackBase,
+            "User-Agent" to mobileUa,
             "Accept" to "*/*"
         )
 
-        val out = mutableListOf<ExtractorLink>()
-        val masterText = runCatching { app.get(masterUrl, headers = headers).text }.getOrNull()
-
-        if (!masterText.isNullOrBlank()) {
-            val lines = masterText.lines()
-            for (i in 0 until lines.size) {
-                val line = lines[i].trim()
-                if (!line.startsWith("#EXT-X-STREAM-INF")) continue
-
-                val height = Regex("RESOLUTION=\\d+x(\\d+)")
-                    .find(line)
-                    ?.groupValues
-                    ?.getOrNull(1)
-                    ?.toIntOrNull()
-
-                val next = lines.getOrNull(i + 1)?.trim().orEmpty()
-                if (next.isBlank() || next.startsWith("#")) continue
-
-                val variantUrl = runCatching { URI(masterUrl).resolve(next).toString() }
-                    .getOrNull()
-                    ?: continue
-
-                val q = height ?: Qualities.Unknown.value
-
-                out += newExtractorLink(
-                    source = name,
-                    name = name,
-                    url = variantUrl,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = hlsReferer
-                    this.headers = headers
-                    this.quality = q
-                }
-            }
-        }
-
-        if (out.isEmpty()) {
-            out += newExtractorLink(
+        return listOf(
+            newExtractorLink(
                 source = name,
                 name = name,
                 url = masterUrl,
                 type = ExtractorLinkType.M3U8
             ) {
-                this.referer = hlsReferer
-                this.headers = headers
+                this.referer = playbackReferer
+                this.headers = streamHeaders
                 this.quality = Qualities.Unknown.value
             }
-        }
-
-        return out
+        )
     }
 }
 
