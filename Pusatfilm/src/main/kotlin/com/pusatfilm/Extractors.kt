@@ -394,7 +394,16 @@ open class Kotakajaib : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val document = runCatching { app.get(pageUrl, referer = referer).document }.getOrNull() ?: return
+        val document = runCatching {
+            app.get(
+                pageUrl,
+                referer = referer,
+                headers = mapOf(
+                    "User-Agent" to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+                    "Accept" to "*/*"
+                )
+            ).document
+        }.getOrNull() ?: return
         val visited = linkedSetOf<String>()
         // Many embeds (including gdriveplayer.to) validate referer. Use the kotakajaib embed page as referer.
         val downstreamReferer = pageUrl
@@ -436,12 +445,13 @@ open class Kotakajaib : ExtractorApi() {
 
         // /embed/{id} pages use buttons with base64 payloads (multi-server selector)
         document.select("button.server-item[data-frame], button.server-item[data-url], button.server-item[data-src]").forEach { btn ->
+            val dataFrame = btn.attr("data-frame").takeIf { it.isNotBlank() }
             val raw =
-                btn.attr("data-frame").takeIf { it.isNotBlank() }
+                dataFrame
                     ?: btn.attr("data-url").takeIf { it.isNotBlank() }
                     ?: btn.attr("data-src").takeIf { it.isNotBlank() }
-            val decoded = runCatching { base64Decode(raw ?: "") }.getOrNull()
-            parseTarget(decoded ?: raw)
+            val decoded = dataFrame?.let { runCatching { base64Decode(it) }.getOrNull() }
+            parseTarget(decoded?.takeIf { it.isNotBlank() } ?: raw)
         }
 
         document.select("a[href*='/api/file/'][href*='/download'], a[href*='/mirror/'], a[href*='/file/']").forEach { a ->
