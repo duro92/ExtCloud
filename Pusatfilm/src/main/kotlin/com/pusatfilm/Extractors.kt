@@ -12,6 +12,7 @@ import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.getAndUnpack
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import javax.crypto.Cipher
@@ -605,31 +606,39 @@ open class EmturbovidExtractor : ExtractorApi() {
     override var mainUrl = "https://emturbovid.com"
     override val requiresReferer = true
 
+    private fun getBaseUrl(url: String?): String? = runCatching {
+        if (url.isNullOrBlank()) return@runCatching null
+        val u = URI(url)
+        val scheme = u.scheme ?: return@runCatching null
+        val host = u.host ?: return@runCatching null
+        "$scheme://$host"
+    }.getOrNull()
+
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val ref = referer ?: "$mainUrl/"
 
+        val page = app.get(url, referer = ref)
+        val pageBase = getBaseUrl(page.url) ?: mainUrl
+
         val headers = mapOf(
-            "Referer" to "$mainUrl/",
-            "Origin" to mainUrl,
+            "Referer" to "$pageBase/",
+            "Origin" to pageBase,
             "User-Agent" to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
             "Accept" to "*/*"
         )
 
-        val page = app.get(url, referer = ref)
+        val dataHash = page.document.selectFirst("#video_player")?.attr("data-hash")
+            ?.takeIf { it.isNotBlank() }
+            ?: page.document.selectFirst("[data-hash]")?.attr("data-hash")?.takeIf { it.isNotBlank() }
 
-        val playerScript = page.document
-            .selectXpath("//script[contains(text(),'var urlPlay')]")
-            .html()
+        val masterCandidate = dataHash
+            ?: Regex("""var\s+urlPlay\s*=\s*['"]([^'"]+)""", RegexOption.IGNORE_CASE)
+                .find(page.text)?.groupValues?.getOrNull(1)
 
-        if (playerScript.isBlank()) return null
+        if (masterCandidate.isNullOrBlank()) return null
 
-        var masterUrl = playerScript
-            .substringAfter("var urlPlay = '")
-            .substringBefore("'")
-            .trim()
-
-        if (masterUrl.startsWith("//")) masterUrl = "https:$masterUrl"
-        if (masterUrl.startsWith("/")) masterUrl = mainUrl + masterUrl
+        val masterUrl = runCatching { URI(page.url).resolve(masterCandidate.trim()).toString() }
+            .getOrElse { masterCandidate.trim() }
 
         val masterText = app.get(masterUrl, headers = headers).text
         val lines = masterText.lines()
@@ -649,9 +658,9 @@ open class EmturbovidExtractor : ExtractorApi() {
             val next = lines.getOrNull(i + 1)?.trim().orEmpty()
             if (next.isBlank() || next.startsWith("#")) continue
 
-            var variantUrl = next
-            if (variantUrl.startsWith("//")) variantUrl = "https:$variantUrl"
-            else if (variantUrl.startsWith("/")) variantUrl = mainUrl + variantUrl
+            val variantUrl = runCatching { URI(masterUrl).resolve(next).toString() }
+                .getOrNull()
+                ?: continue
 
             val q = height ?: Qualities.Unknown.value
 

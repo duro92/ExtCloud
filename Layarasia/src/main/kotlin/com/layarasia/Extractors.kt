@@ -27,6 +27,18 @@ class Nunap2p : VidStack() {
     override var requiresReferer = true
 }
 
+class Nunastrp : VidStack() {
+    override var name = "Nunastrp"
+    override var mainUrl = "https://nuna.strp2p.site"
+    override var requiresReferer = true
+}
+
+class Nunaxyz : VidStack() {
+    override var name = "Nunaxyz"
+    override var mainUrl = "https://nuna.upns.xyz"
+    override var requiresReferer = true
+}
+
 class Smoothpre: VidHidePro() {
     override var name = "EarnVids"
     override var mainUrl = "https://smoothpre.com"

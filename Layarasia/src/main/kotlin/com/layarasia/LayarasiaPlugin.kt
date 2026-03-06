@@ -16,5 +16,7 @@ class LayarasiaPlugin : Plugin() {
         registerExtractorAPI(Nunap2p())
         registerExtractorAPI(Dingtezuni())
         registerExtractorAPI(Minochinos())
+        registerExtractorAPI(Nunastrp())
+        registerExtractorAPI(Nunaxyz())
     }
 }
