@@ -7,7 +7,7 @@ import com.lagradost.cloudstream3.extractors.FileMoonIn
 import com.lagradost.cloudstream3.extractors.FilemoonV2
 
 @CloudstreamPlugin
-class FufafilmPlugin : Plugin() {
+class FunmovieslixProvider : Plugin() {
     override fun load(context: Context) {
         Funmovieslix.context = context
         registerMainAPI(Funmovieslix())
