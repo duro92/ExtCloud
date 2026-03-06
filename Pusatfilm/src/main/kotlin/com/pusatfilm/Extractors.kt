@@ -699,17 +699,14 @@ open class EmturbovidExtractor : ExtractorApi() {
         }
     }
 
-    private suspend fun loadEmbedPage(targetUrl: String, ref: String): com.lagradost.cloudstream3.app.HttpResponse? {
+    private suspend fun loadEmbedPage(targetUrl: String, ref: String) = runCatching {
         val headers = mapOf(
             "User-Agent" to mobileUa,
             "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
             "Referer" to ref
         )
-
-        return runCatching {
-            app.get(targetUrl, headers = headers, referer = ref)
-        }.getOrNull()
-    }
+        app.get(targetUrl, headers = headers, referer = ref)
+    }.getOrNull()
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val fallbackRef = "https://kotakajaib.me/"
