@@ -13,6 +13,7 @@ import com.lagradost.cloudstream3.utils.getAndUnpack
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.net.URI
+import org.jsoup.nodes.Document
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import javax.crypto.Cipher
@@ -628,87 +629,157 @@ open class EmturbovidExtractor : ExtractorApi() {
         "$scheme://$host$port"
     }.getOrNull()
 
-    private fun normalizeReferer(base: String?): String? {
-        if (base.isNullOrBlank()) return null
-        return if (base.endsWith("/")) base else "$base/"
+    private fun normalizeReferer(url: String?): String? {
+        if (url.isNullOrBlank()) return null
+        return if (url.endsWith("/")) url else "$url/"
     }
 
-    private fun isTurboHost(host: String?): Boolean {
-        if (host.isNullOrBlank()) return false
-        return host.contains("turbosplayer", ignoreCase = true) ||
-            host.contains("turboviplay", ignoreCase = true) ||
-            host.contains("turbovidhls", ignoreCase = true)
+    private fun isAbsoluteUrl(url: String): Boolean {
+        return url.startsWith("http://", true) || url.startsWith("https://", true)
     }
 
-    private fun resolvePlaybackBase(pageUrl: String, masterUrl: String): String {
-        val masterBase = getBaseUrl(masterUrl)
-        val pageBase = getBaseUrl(pageUrl)
+    private fun resolveUrl(base: String, value: String): String {
+        return runCatching {
+            URI(base).resolve(value).toString()
+        }.getOrElse { value }
+    }
 
-        val masterHost = runCatching { URI(masterUrl).host }.getOrNull()
-        val pageHost = runCatching { URI(pageUrl).host }.getOrNull()
+    private fun extractAllM3u8Candidates(html: String, doc: Document, pageUrl: String): List<String> {
+        val found = linkedSetOf<String>()
 
+        fun add(raw: String?) {
+            val v = raw?.trim()?.trim('"', '\'', ' ')
+            if (v.isNullOrBlank()) return
+            if (!v.contains(".m3u8", ignoreCase = true) && !v.contains("/data", ignoreCase = true)) return
+            found += if (isAbsoluteUrl(v)) v else resolveUrl(pageUrl, v)
+        }
+
+        // Common patterns
+        Regex("""https?:\/\/[^\s"'\\]+\.m3u8[^\s"'\\]*""", RegexOption.IGNORE_CASE)
+            .findAll(html)
+            .forEach { add(it.value) }
+
+        Regex("""["']([^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE)
+            .findAll(html)
+            .forEach { add(it.groupValues.getOrNull(1)) }
+
+        Regex("""file\s*:\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+            .findAll(html)
+            .forEach { add(it.groupValues.getOrNull(1)) }
+
+        Regex("""src\s*:\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+            .findAll(html)
+            .forEach { add(it.groupValues.getOrNull(1)) }
+
+        Regex("""urlPlay\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+            .findAll(html)
+            .forEach { add(it.groupValues.getOrNull(1)) }
+
+        Regex("""data-hash\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+            .findAll(html)
+            .forEach { add(it.groupValues.getOrNull(1)) }
+
+        doc.select("[src]").forEach { add(it.attr("src")) }
+        doc.select("[data-src]").forEach { add(it.attr("data-src")) }
+        doc.select("[data-hash]").forEach { add(it.attr("data-hash")) }
+
+        return found.toList()
+    }
+
+    private fun scoreCandidate(url: String): Int {
+        val u = url.lowercase()
         return when {
-            isTurboHost(masterHost) && !masterBase.isNullOrBlank() -> masterBase
-            isTurboHost(pageHost) && !pageBase.isNullOrBlank() -> pageBase
-            !masterBase.isNullOrBlank() -> masterBase
-            !pageBase.isNullOrBlank() -> pageBase
-            else -> mainUrl
+            "cdn1.turboviplay.com/data" in u -> 100
+            "cdn." in u && "turboviplay" in u && ".m3u8" in u -> 95
+            "turboviplay.com/data" in u -> 90
+            "turbovidhls.com" in u && ".m3u8" in u -> 80
+            "turbosplayer.com" in u && "master.m3u8" in u -> 60
+            ".m3u8" in u -> 40
+            else -> 0
         }
     }
 
-    private fun extractMasterCandidate(html: String, doc: org.jsoup.nodes.Document): String? {
-        return doc.selectFirst("#video_player")?.attr("data-hash")
-            ?.takeIf { it.isNotBlank() }
-            ?: doc.selectFirst("[data-hash]")?.attr("data-hash")?.takeIf { it.isNotBlank() }
-            ?: Regex("""data-hash\s*=\s*['"]([^'"]+)['"]""", RegexOption.IGNORE_CASE)
-                .find(html)?.groupValues?.getOrNull(1)
-            ?: Regex("""var\s+urlPlay\s*=\s*['"]([^'"]+)['"]""", RegexOption.IGNORE_CASE)
-                .find(html)?.groupValues?.getOrNull(1)
-            ?: Regex("""["']file["']\s*:\s*["']([^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE)
-                .find(html)?.groupValues?.getOrNull(1)
-            ?: Regex("""["']src["']\s*:\s*["']([^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE)
-                .find(html)?.groupValues?.getOrNull(1)
+    private suspend fun loadEmbedPage(targetUrl: String, ref: String): com.lagradost.cloudstream3.app.HttpResponse? {
+        val headers = mapOf(
+            "User-Agent" to mobileUa,
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Referer" to ref
+        )
+
+        return runCatching {
+            app.get(targetUrl, headers = headers, referer = ref)
+        }.getOrNull()
     }
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val initialRef = referer ?: "$mainUrl/"
+        val fallbackRef = "https://kotakajaib.me/"
+        val initialRef = referer ?: fallbackRef
 
-        val pageHeaders = mapOf(
-            "User-Agent" to mobileUa,
-            "Accept" to "*/*"
-        )
+        // 1) buka page awal
+        var page = loadEmbedPage(url, initialRef)
 
-        var page = runCatching {
-            app.get(url, referer = initialRef, headers = pageHeaders)
-        }.getOrNull() ?: return null
-
-        var masterCandidate = extractMasterCandidate(page.text, page.document)
-
-        // Beberapa mirror hanya mau kebaca jika embed dibuka dari referer tertentu.
-        if (masterCandidate.isNullOrBlank() && !initialRef.contains("kotakajaib.me", ignoreCase = true)) {
-            val fallbackRef = "https://kotakajaib.me/"
-            page = runCatching {
-                app.get(url, referer = fallbackRef, headers = pageHeaders)
-            }.getOrNull() ?: page
-
-            masterCandidate = extractMasterCandidate(page.text, page.document)
+        // 2) retry pakai referer kotakajaib kalau perlu
+        if (page == null) {
+            page = loadEmbedPage(url, fallbackRef)
         }
 
-        if (masterCandidate.isNullOrBlank()) return null
+        if (page == null) return null
 
-        val masterUrl = runCatching {
-            URI(page.url).resolve(masterCandidate.trim()).toString()
-        }.getOrElse {
-            masterCandidate.trim()
+        // 3) kalau page awal belum sampai ke host final, coba akses ulang pakai URL final hasil redirect
+        // biasanya emturbovid -> turbovidhls
+        val finalPageUrl = page.url
+        val finalPageBase = getBaseUrl(finalPageUrl) ?: mainUrl
+
+        val html = page.text
+        val doc = page.document
+
+        // 4) cari kandidat stream dari HTML
+        val candidates = extractAllM3u8Candidates(html, doc, finalPageUrl)
+            .sortedByDescending { scoreCandidate(it) }
+
+        var best = candidates.firstOrNull()
+
+        // 5) kalau yang ketemu masih /t/..., buka sekali lagi halaman itu dan extract ulang
+        if (!best.isNullOrBlank() && !best.contains(".m3u8", ignoreCase = true) && best.contains("/t/", ignoreCase = true)) {
+            val nestedPage = loadEmbedPage(best, fallbackRef)
+            if (nestedPage != null) {
+                val nestedCandidates = extractAllM3u8Candidates(
+                    nestedPage.text,
+                    nestedPage.document,
+                    nestedPage.url
+                ).sortedByDescending { scoreCandidate(it) }
+
+                if (nestedCandidates.isNotEmpty()) {
+                    best = nestedCandidates.first()
+                }
+            }
         }
 
-        val playbackBase = resolvePlaybackBase(page.url, masterUrl)
-        val playbackReferer = normalizeReferer(playbackBase) ?: "$mainUrl/"
+        // 6) fallback: kalau HTML tidak berisi m3u8, coba bentuk pattern umum data3 dari id /t/{id}
+        if (best.isNullOrBlank()) {
+            val videoId = Regex("""/t/([A-Za-z0-9]+)""")
+                .find(finalPageUrl)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?: Regex("""/t/([A-Za-z0-9]+)""")
+                    .find(url)
+                    ?.groupValues
+                    ?.getOrNull(1)
 
-        // Header dibuat konsisten: referer dan origin berasal dari origin yang sama.
+            if (!videoId.isNullOrBlank()) {
+                best = "https://cdn1.turboviplay.com/data3/$videoId/$videoId.m3u8"
+            }
+        }
+
+        if (best.isNullOrBlank()) return null
+
+        // Playback harus tetap pakai referer page, bukan referer master variant g239/g263
+        val playbackReferer = normalizeReferer(finalPageUrl) ?: normalizeReferer(finalPageBase) ?: "$mainUrl/"
+        val playbackOrigin = finalPageBase
+
         val streamHeaders = linkedMapOf(
             "Referer" to playbackReferer,
-            "Origin" to playbackBase,
+            "Origin" to playbackOrigin,
             "User-Agent" to mobileUa,
             "Accept" to "*/*"
         )
@@ -717,7 +788,7 @@ open class EmturbovidExtractor : ExtractorApi() {
             newExtractorLink(
                 source = name,
                 name = name,
-                url = masterUrl,
+                url = best,
                 type = ExtractorLinkType.M3U8
             ) {
                 this.referer = playbackReferer
