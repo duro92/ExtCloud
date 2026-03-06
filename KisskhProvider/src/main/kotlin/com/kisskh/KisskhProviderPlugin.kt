@@ -5,7 +5,7 @@ import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
 
 @CloudstreamPlugin
-class FunmovieslixProvider : Plugin() {
+class KisskhProviderPlugin : Plugin() {
     override fun load(context: Context) {
         KisskhProvider.context = context
         registerMainAPI(KisskhProvider())
