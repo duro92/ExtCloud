@@ -670,7 +670,7 @@ open class EmturbovidExtractor : ExtractorApi() {
                 url = variantUrl,
                 type = ExtractorLinkType.M3U8
             ) {
-                this.referer = "$mainUrl/"
+                this.referer = "$pageBase/"
                 this.headers = headers
                 this.quality = q
             }
@@ -683,7 +683,7 @@ open class EmturbovidExtractor : ExtractorApi() {
                 url = masterUrl,
                 type = ExtractorLinkType.M3U8
             ) {
-                this.referer = "$mainUrl/"
+                this.referer = "$pageBase/"
                 this.headers = headers
                 this.quality = Qualities.Unknown.value
             }
