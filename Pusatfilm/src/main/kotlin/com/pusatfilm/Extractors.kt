@@ -617,14 +617,35 @@ open class EmturbovidExtractor : ExtractorApi() {
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val ref = referer ?: "$mainUrl/"
 
-        val page = app.get(
-            url,
-            referer = ref,
-            headers = mapOf(
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-                "Accept" to "*/*"
-            )
+        val pageHeaders = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+            "Accept" to "*/*"
         )
+
+        fun extractMasterCandidate(html: String, doc: org.jsoup.nodes.Document): String? {
+            val dataHash = doc.selectFirst("#video_player")?.attr("data-hash")
+                ?.takeIf { it.isNotBlank() }
+                ?: doc.selectFirst("[data-hash]")?.attr("data-hash")?.takeIf { it.isNotBlank() }
+                ?: Regex("""data-hash\s*=\s*['"]([^'"]+)""", RegexOption.IGNORE_CASE)
+                    .find(html)?.groupValues?.getOrNull(1)
+
+            return dataHash
+                ?: Regex("""var\s+urlPlay\s*=\s*['"]([^'"]+)""", RegexOption.IGNORE_CASE)
+                    .find(html)?.groupValues?.getOrNull(1)
+        }
+
+        var page = app.get(url, referer = ref, headers = pageHeaders)
+        var masterCandidate = extractMasterCandidate(page.text, page.document)
+
+        // Some hosts expect a specific embed referer (e.g., kotakajaib.me). Retry once if empty.
+        if (masterCandidate.isNullOrBlank() && !ref.contains("kotakajaib.me", ignoreCase = true)) {
+            val fallbackRef = "https://kotakajaib.me/"
+            page = app.get(url, referer = fallbackRef, headers = pageHeaders)
+            masterCandidate = extractMasterCandidate(page.text, page.document)
+        }
+
+        if (masterCandidate.isNullOrBlank()) return null
+
         val pageBase = getBaseUrl(page.url) ?: mainUrl
 
         val headers = mapOf(
@@ -633,18 +654,6 @@ open class EmturbovidExtractor : ExtractorApi() {
             "User-Agent" to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
             "Accept" to "*/*"
         )
-
-        val dataHash = page.document.selectFirst("#video_player")?.attr("data-hash")
-            ?.takeIf { it.isNotBlank() }
-            ?: page.document.selectFirst("[data-hash]")?.attr("data-hash")?.takeIf { it.isNotBlank() }
-            ?: Regex("""data-hash\s*=\s*['"]([^'"]+)""", RegexOption.IGNORE_CASE)
-                .find(page.text)?.groupValues?.getOrNull(1)
-
-        val masterCandidate = dataHash
-            ?: Regex("""var\s+urlPlay\s*=\s*['"]([^'"]+)""", RegexOption.IGNORE_CASE)
-                .find(page.text)?.groupValues?.getOrNull(1)
-
-        if (masterCandidate.isNullOrBlank()) return null
 
         val masterUrl = runCatching { URI(page.url).resolve(masterCandidate.trim()).toString() }
             .getOrElse { masterCandidate.trim() }
