@@ -629,11 +629,6 @@ open class EmturbovidExtractor : ExtractorApi() {
         "$scheme://$host$port"
     }.getOrNull()
 
-    private fun normalizeReferer(url: String?): String? {
-        if (url.isNullOrBlank()) return null
-        return if (url.endsWith("/")) url else "$url/"
-    }
-
     private fun isAbsoluteUrl(url: String): Boolean {
         return url.startsWith("http://", true) || url.startsWith("https://", true)
     }
@@ -664,7 +659,11 @@ open class EmturbovidExtractor : ExtractorApi() {
                 "Referer" to referer,
                 "Origin" to origin,
                 "User-Agent" to mobileUa,
-                "Accept" to "*/*"
+                "Accept" to "*/*",
+                "Accept-Language" to "en-US,en;q=0.9",
+                "Connection" to "keep-alive",
+                "Sec-Fetch-Mode" to "cors",
+                "Sec-Fetch-Site" to "cross-site"
             ),
             referer = referer
         )
@@ -692,59 +691,6 @@ open class EmturbovidExtractor : ExtractorApi() {
         return out
     }
 
-    private fun parseFirstSegment(mediaUrl: String, text: String): String? {
-        val segment = text.lines()
-            .map { it.trim() }
-            .firstOrNull { it.isNotBlank() && !it.startsWith("#") }
-            ?: return null
-
-        return resolveUrl(mediaUrl, segment)
-    }
-
-    private fun isBadSegmentContentType(contentType: String): Boolean {
-        val ct = contentType.lowercase()
-        return ct.startsWith("image/") ||
-            ct.contains("text/html") ||
-            ct.contains("application/json") ||
-            ct.contains("text/plain") ||
-            ct.contains("xml")
-    }
-
-    private suspend fun validatePlaylist(
-        playlistUrl: String,
-        referer: String,
-        origin: String
-    ): Boolean {
-        val playlistResp = getResponse(playlistUrl, referer, origin) ?: return false
-        val playlistText = playlistResp.text
-
-        if (!playlistText.contains("#EXTM3U")) return false
-
-        // Kalau master playlist, cek variant satu per satu
-        if (playlistText.contains("#EXT-X-STREAM-INF", ignoreCase = true)) {
-            val variants = parseMasterVariants(playlistUrl, playlistText)
-                .sortedByDescending { it.second ?: 0 }
-
-            for ((variantUrl, _) in variants) {
-                if (validatePlaylist(variantUrl, referer, origin)) return true
-            }
-            return false
-        }
-
-        // Media playlist harus punya segment
-        if (!playlistText.contains("#EXTINF", ignoreCase = true)) return false
-
-        val firstSegment = parseFirstSegment(playlistUrl, playlistText) ?: return false
-        val segResp = getResponse(firstSegment, referer, origin) ?: return false
-
-        val contentType = segResp.headers["content-type"]?.lowercase().orEmpty()
-
-        // Ini inti fix-nya: kalau segment ternyata image/png seperti hasil HTTP Toolkit, tolak
-        if (isBadSegmentContentType(contentType)) return false
-
-        return true
-    }
-
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val entryRef = referer ?: "https://kotakajaib.me/"
 
@@ -761,19 +707,47 @@ open class EmturbovidExtractor : ExtractorApi() {
 
         val pageUrl = page.url
         val pageBase = getBaseUrl(pageUrl) ?: mainUrl
-        val playbackReferer = normalizeReferer(pageUrl) ?: "$pageBase/"
+        val pageReferer = pageUrl
 
         val masterUrl = extractMasterCandidate(page.text, page.document, pageUrl) ?: return null
 
-        val ok = validatePlaylist(
-            playlistUrl = masterUrl,
-            referer = playbackReferer,
+        val masterResp = getResponse(
+            url = masterUrl,
+            referer = pageReferer,
             origin = pageBase
+        ) ?: return null
+
+        val masterText = masterResp.text
+        if (!masterText.contains("#EXTM3U", ignoreCase = true)) return null
+
+        val variantHeaders = mapOf(
+            "Referer" to masterUrl,
+            "Origin" to pageBase,
+            "User-Agent" to mobileUa,
+            "Accept" to "*/*",
+            "Accept-Language" to "en-US,en;q=0.9",
+            "Connection" to "keep-alive",
+            "Sec-Fetch-Mode" to "cors",
+            "Sec-Fetch-Site" to "cross-site"
         )
 
-        if (!ok) {
-            // Playlist host ini terbukti bukan stream video valid untuk ExoPlayer
-            return null
+        val variants = parseMasterVariants(masterUrl, masterText)
+            .distinctBy { it.first }
+            .sortedByDescending { it.second ?: 0 }
+
+        if (variants.isNotEmpty()) {
+            return variants.map { (variantUrl, height) ->
+                newExtractorLink(
+                    source = name,
+                    name = name,
+                    url = variantUrl,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = masterUrl
+                    this.headers = variantHeaders
+                    this.quality = height ?: Qualities.Unknown.value
+                }
+            }
         }
 
         return listOf(
@@ -783,12 +757,16 @@ open class EmturbovidExtractor : ExtractorApi() {
                 url = masterUrl,
                 type = ExtractorLinkType.M3U8
             ) {
-                this.referer = playbackReferer
+                this.referer = pageReferer
                 this.headers = mapOf(
-                    "Referer" to playbackReferer,
+                    "Referer" to pageReferer,
                     "Origin" to pageBase,
                     "User-Agent" to mobileUa,
-                    "Accept" to "*/*"
+                    "Accept" to "*/*",
+                    "Accept-Language" to "en-US,en;q=0.9",
+                    "Connection" to "keep-alive",
+                    "Sec-Fetch-Mode" to "cors",
+                    "Sec-Fetch-Site" to "cross-site"
                 )
                 this.quality = Qualities.Unknown.value
             }
