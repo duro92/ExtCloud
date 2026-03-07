@@ -701,6 +701,24 @@ open class EmturbovidExtractor : ExtractorApi() {
         return out
     }
 
+    private fun parseFirstMediaEntry(playlistUrl: String, text: String): String? {
+        val line = text.lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.isNotBlank() && !it.startsWith("#") }
+            ?: return null
+        return resolveUrl(playlistUrl, line)
+    }
+
+    private fun isLikelyBlockedContentType(contentType: String?): Boolean {
+        val ct = contentType?.lowercase().orEmpty()
+        if (ct.isBlank()) return false
+        return ct.contains("text/html") ||
+            ct.contains("application/json") ||
+            ct.contains("text/plain") ||
+            ct.contains("xml") ||
+            ct.startsWith("image/")
+    }
+
     private data class PlayableVariant(
         val url: String,
         val quality: Int?,
@@ -721,48 +739,49 @@ open class EmturbovidExtractor : ExtractorApi() {
         masterUrl: String,
         origin: String
     ): PlayableVariant? {
-        val noRefTry = getResponse(
-            url = variantUrl,
-            referer = null,
-            origin = origin
-        )?.text?.takeIf { it.contains("#EXTM3U", ignoreCase = true) }
-
-        if (noRefTry != null) {
-            return PlayableVariant(
+        suspend fun validateByReferer(ref: String?): Boolean {
+            val playlistResp = getResponse(
                 url = variantUrl,
-                quality = quality,
-                referer = null
-            )
+                referer = ref,
+                origin = origin
+            ) ?: return false
+
+            val playlistText = playlistResp.text
+            if (!playlistText.contains("#EXTM3U", ignoreCase = true)) return false
+
+            val mediaPlaylistUrl = if (playlistText.contains("#EXT-X-STREAM-INF", ignoreCase = true)) {
+                parseMasterVariants(variantUrl, playlistText)
+                    .maxByOrNull { it.second ?: 0 }
+                    ?.first
+                    ?: return false
+            } else {
+                variantUrl
+            }
+
+            val mediaText = if (mediaPlaylistUrl == variantUrl) {
+                playlistText
+            } else {
+                val mediaResp = getResponse(mediaPlaylistUrl, ref, origin) ?: return false
+                mediaResp.text
+            }
+            if (!mediaText.contains("#EXTM3U", ignoreCase = true)) return false
+
+            val firstSeg = parseFirstMediaEntry(mediaPlaylistUrl, mediaText) ?: return false
+            val segResp = getResponse(firstSeg, ref, origin) ?: return false
+            if (isLikelyBlockedContentType(segResp.headers["content-type"])) return false
+
+            return true
         }
 
-        val firstTry = getResponse(
-            url = variantUrl,
-            referer = pageReferer,
-            origin = origin
-        )?.text?.takeIf { it.contains("#EXTM3U", ignoreCase = true) }
-
-        if (firstTry != null) {
-            return PlayableVariant(
-                url = variantUrl,
-                quality = quality,
-                referer = pageReferer
-            )
+        if (validateByReferer(pageReferer)) {
+            return PlayableVariant(variantUrl, quality, pageReferer)
         }
-
-        val secondTry = getResponse(
-            url = variantUrl,
-            referer = masterUrl,
-            origin = origin
-        )?.text?.takeIf { it.contains("#EXTM3U", ignoreCase = true) }
-
-        if (secondTry != null) {
-            return PlayableVariant(
-                url = variantUrl,
-                quality = quality,
-                referer = masterUrl
-            )
+        if (validateByReferer(masterUrl)) {
+            return PlayableVariant(variantUrl, quality, masterUrl)
         }
-
+        if (validateByReferer(null)) {
+            return PlayableVariant(variantUrl, quality, null)
+        }
         return null
     }
 
