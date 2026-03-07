@@ -691,6 +691,57 @@ open class EmturbovidExtractor : ExtractorApi() {
         return out
     }
 
+    private data class PlayableVariant(
+        val url: String,
+        val quality: Int?,
+        val referer: String,
+    )
+
+    private fun qualityPriority(quality: Int?): Int {
+        val q = quality ?: return 0
+        // Prefer medium quality for stability (often less likely to be throttled than max bitrate).
+        val target = 720
+        return -kotlin.math.abs(q - target)
+    }
+
+    private suspend fun validateVariant(
+        variantUrl: String,
+        quality: Int?,
+        pageReferer: String,
+        masterUrl: String,
+        origin: String
+    ): PlayableVariant? {
+        val firstTry = getResponse(
+            url = variantUrl,
+            referer = pageReferer,
+            origin = origin
+        )?.text?.takeIf { it.contains("#EXTM3U", ignoreCase = true) }
+
+        if (firstTry != null) {
+            return PlayableVariant(
+                url = variantUrl,
+                quality = quality,
+                referer = pageReferer
+            )
+        }
+
+        val secondTry = getResponse(
+            url = variantUrl,
+            referer = masterUrl,
+            origin = origin
+        )?.text?.takeIf { it.contains("#EXTM3U", ignoreCase = true) }
+
+        if (secondTry != null) {
+            return PlayableVariant(
+                url = variantUrl,
+                quality = quality,
+                referer = masterUrl
+            )
+        }
+
+        return null
+    }
+
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val entryRef = referer ?: "https://kotakajaib.me/"
 
@@ -734,9 +785,37 @@ open class EmturbovidExtractor : ExtractorApi() {
 
         val variants = parseMasterVariants(masterUrl, masterText)
             .distinctBy { it.first }
-            .sortedByDescending { it.second ?: 0 }
+            .sortedByDescending { qualityPriority(it.second) }
 
         if (variants.isNotEmpty()) {
+            val playable = mutableListOf<PlayableVariant>()
+            for ((variantUrl, quality) in variants) {
+                val ok = validateVariant(
+                    variantUrl = variantUrl,
+                    quality = quality,
+                    pageReferer = pageReferer,
+                    masterUrl = masterUrl,
+                    origin = pageBase
+                )
+                if (ok != null) playable += ok
+            }
+
+            if (playable.isNotEmpty()) {
+                return playable.map { v ->
+                    val headers = variantHeaders + ("Referer" to v.referer)
+                    newExtractorLink(
+                        source = name,
+                        name = name,
+                        url = v.url,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = v.referer
+                        this.headers = headers
+                        this.quality = v.quality ?: Qualities.Unknown.value
+                    }
+                }
+            }
+
             return variants.map { (variantUrl, height) ->
                 newExtractorLink(
                     source = name,
