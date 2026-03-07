@@ -395,16 +395,23 @@ open class Kotakajaib : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val document = runCatching {
+        suspend fun fetchDocWith(ref: String) = runCatching {
             app.get(
                 pageUrl,
-                referer = referer,
+                referer = ref,
                 headers = mapOf(
                     "User-Agent" to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
                     "Accept" to "*/*"
                 )
             ).document
-        }.getOrNull() ?: return
+        }.getOrNull()
+
+        var document = fetchDocWith(referer) ?: return
+        val hasServerButton = document.selectFirst("button.server-item[data-frame], button.server-item[data-url], button.server-item[data-src]") != null
+        if (!hasServerButton) {
+            // kotakajaib embed checks referrer host; retry with known whitelisted referrer.
+            document = fetchDocWith("https://v3.pusatfilm21info.com/") ?: document
+        }
         val visited = linkedSetOf<String>()
         // Many embeds (including gdriveplayer.to) validate referer. Use the kotakajaib embed page as referer.
         val downstreamReferer = pageUrl
@@ -650,21 +657,24 @@ open class EmturbovidExtractor : ExtractorApi() {
 
     private suspend fun getResponse(
         url: String,
-        referer: String,
+        referer: String?,
         origin: String
     ) = runCatching {
+        val headers = linkedMapOf(
+            "Origin" to origin,
+            "User-Agent" to mobileUa,
+            "Accept" to "*/*",
+            "Accept-Language" to "en-US,en;q=0.9",
+            "Connection" to "keep-alive",
+            "Sec-Fetch-Mode" to "cors",
+            "Sec-Fetch-Site" to "cross-site"
+        )
+        if (!referer.isNullOrBlank()) {
+            headers["Referer"] = referer
+        }
         app.get(
             url,
-            headers = mapOf(
-                "Referer" to referer,
-                "Origin" to origin,
-                "User-Agent" to mobileUa,
-                "Accept" to "*/*",
-                "Accept-Language" to "en-US,en;q=0.9",
-                "Connection" to "keep-alive",
-                "Sec-Fetch-Mode" to "cors",
-                "Sec-Fetch-Site" to "cross-site"
-            ),
+            headers = headers,
             referer = referer
         )
     }.getOrNull()
@@ -694,7 +704,7 @@ open class EmturbovidExtractor : ExtractorApi() {
     private data class PlayableVariant(
         val url: String,
         val quality: Int?,
-        val referer: String,
+        val referer: String?,
     )
 
     private fun qualityPriority(quality: Int?): Int {
@@ -711,6 +721,20 @@ open class EmturbovidExtractor : ExtractorApi() {
         masterUrl: String,
         origin: String
     ): PlayableVariant? {
+        val noRefTry = getResponse(
+            url = variantUrl,
+            referer = null,
+            origin = origin
+        )?.text?.takeIf { it.contains("#EXTM3U", ignoreCase = true) }
+
+        if (noRefTry != null) {
+            return PlayableVariant(
+                url = variantUrl,
+                quality = quality,
+                referer = null
+            )
+        }
+
         val firstTry = getResponse(
             url = variantUrl,
             referer = pageReferer,
@@ -764,6 +788,10 @@ open class EmturbovidExtractor : ExtractorApi() {
 
         val masterResp = getResponse(
             url = masterUrl,
+            referer = null,
+            origin = pageBase
+        ) ?: getResponse(
+            url = masterUrl,
             referer = pageReferer,
             origin = pageBase
         ) ?: return null
@@ -772,15 +800,13 @@ open class EmturbovidExtractor : ExtractorApi() {
         if (!masterText.contains("#EXTM3U", ignoreCase = true)) return null
 
         val variantHeaders = mapOf(
-            "Referer" to pageReferer,
             "Origin" to pageBase,
             "User-Agent" to mobileUa,
             "Accept" to "*/*",
             "Accept-Language" to "en-US,en;q=0.9",
             "Connection" to "keep-alive",
             "Sec-Fetch-Mode" to "cors",
-            "Sec-Fetch-Site" to "cross-site",
-            "Range" to "bytes=0-"
+            "Sec-Fetch-Site" to "cross-site"
         )
 
         val variants = parseMasterVariants(masterUrl, masterText)
@@ -802,14 +828,18 @@ open class EmturbovidExtractor : ExtractorApi() {
 
             if (playable.isNotEmpty()) {
                 return playable.map { v ->
-                    val headers = variantHeaders + ("Referer" to v.referer)
+                    val headers = if (v.referer.isNullOrBlank()) {
+                        variantHeaders
+                    } else {
+                        variantHeaders + ("Referer" to v.referer)
+                    }
                     newExtractorLink(
                         source = name,
                         name = name,
                         url = v.url,
                         type = ExtractorLinkType.M3U8
                     ) {
-                        this.referer = v.referer
+                        v.referer?.let { this.referer = it }
                         this.headers = headers
                         this.quality = v.quality ?: Qualities.Unknown.value
                     }
@@ -823,7 +853,6 @@ open class EmturbovidExtractor : ExtractorApi() {
                     url = variantUrl,
                     type = ExtractorLinkType.M3U8
                 ) {
-                    this.referer = pageReferer
                     this.headers = variantHeaders
                     this.quality = height ?: Qualities.Unknown.value
                 }
@@ -837,18 +866,7 @@ open class EmturbovidExtractor : ExtractorApi() {
                 url = masterUrl,
                 type = ExtractorLinkType.M3U8
             ) {
-                this.referer = pageReferer
-                this.headers = mapOf(
-                    "Referer" to pageReferer,
-                    "Origin" to pageBase,
-                    "User-Agent" to mobileUa,
-                    "Accept" to "*/*",
-                    "Accept-Language" to "en-US,en;q=0.9",
-                    "Connection" to "keep-alive",
-                    "Sec-Fetch-Mode" to "cors",
-                    "Sec-Fetch-Site" to "cross-site",
-                    "Range" to "bytes=0-"
-                )
+                this.headers = variantHeaders
                 this.quality = Qualities.Unknown.value
             }
         )
