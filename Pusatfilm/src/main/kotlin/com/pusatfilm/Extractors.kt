@@ -721,14 +721,15 @@ open class EmturbovidExtractor : ExtractorApi() {
         if (!masterText.contains("#EXTM3U", ignoreCase = true)) return null
 
         val variantHeaders = mapOf(
-            "Referer" to masterUrl,
+            "Referer" to pageReferer,
             "Origin" to pageBase,
             "User-Agent" to mobileUa,
             "Accept" to "*/*",
             "Accept-Language" to "en-US,en;q=0.9",
             "Connection" to "keep-alive",
             "Sec-Fetch-Mode" to "cors",
-            "Sec-Fetch-Site" to "cross-site"
+            "Sec-Fetch-Site" to "cross-site",
+            "Range" to "bytes=0-"
         )
 
         val variants = parseMasterVariants(masterUrl, masterText)
@@ -743,7 +744,7 @@ open class EmturbovidExtractor : ExtractorApi() {
                     url = variantUrl,
                     type = ExtractorLinkType.M3U8
                 ) {
-                    this.referer = masterUrl
+                    this.referer = pageReferer
                     this.headers = variantHeaders
                     this.quality = height ?: Qualities.Unknown.value
                 }
@@ -766,7 +767,8 @@ open class EmturbovidExtractor : ExtractorApi() {
                     "Accept-Language" to "en-US,en;q=0.9",
                     "Connection" to "keep-alive",
                     "Sec-Fetch-Mode" to "cors",
-                    "Sec-Fetch-Site" to "cross-site"
+                    "Sec-Fetch-Site" to "cross-site",
+                    "Range" to "bytes=0-"
                 )
                 this.quality = Qualities.Unknown.value
             }
