@@ -9,6 +9,7 @@ import com.lagradost.cloudstream3.mainPageOf
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Element
+import java.net.URLEncoder
 
 class Filmapik : MainAPI() {
     companion object {
@@ -35,24 +36,73 @@ class Filmapik : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-    val a = selectFirst("div.data h3 a") ?: return null
-    val title = a.ownText().trim()
-    val href = fixUrl(a.attr("href"))
-    val poster = fixUrlNull(selectFirst("img[src]")?.attr("src"))
-        ?.fixImageQuality()
-    val rating = selectFirst("div.rating")
-        ?.ownText()?.trim()?.toDoubleOrNull()
-    val quality = selectFirst("span.quality")?.text()?.trim()
-    return newMovieSearchResponse(title, href, TvType.Movie) {
-        this.posterUrl = poster
-        if (!quality.isNullOrBlank()) addQuality(quality)
-        rating?.let { this.score = Score.from10(it) }
+        val a = selectFirst(
+            "div.data h3 a, div.thumbnail a[href], div.image div.thumbnail a[href], h3 a[href], h2 a[href], a[href]"
+        ) ?: return null
+        val href = a.attr("href").trim().takeIf { it.isNotBlank() } ?: return null
+        val title = a.text().trim()
+            .ifBlank { selectFirst("img[alt]")?.attr("alt")?.trim().orEmpty() }
+            .ifBlank { return null }
+
+        val poster = fixUrlNull(
+            selectFirst("img[src], img[data-src], img[data-lazy-src]")?.let { img ->
+                when {
+                    img.hasAttr("src") -> img.attr("src")
+                    img.hasAttr("data-src") -> img.attr("data-src")
+                    else -> img.attr("data-lazy-src")
+                }
+            }
+        )?.fixImageQuality()
+
+        val rating = selectFirst("div.rating, .imdb, .tmdb, .score")
+            ?.text()
+            ?.replace(",", ".")
+            ?.let { Regex("""(\d+(\.\d+)?)""").find(it)?.groupValues?.getOrNull(1) }
+            ?.toDoubleOrNull()
+
+        val quality = selectFirst("span.quality, span.hd, span.q")
+            ?.text()
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+
+        val type = when {
+            selectFirst("span.tvshows, span.tv, .tvshows, .tv-show") != null -> TvType.TvSeries
+            href.contains("/tvshows/", true) || href.contains("/series/", true) -> TvType.TvSeries
+            else -> TvType.Movie
+        }
+
+        return if (type == TvType.TvSeries) {
+            newTvSeriesSearchResponse(title, fixUrl(href), TvType.TvSeries) {
+                this.posterUrl = poster
+                rating?.let { this.score = Score.from10(it) }
+            }
+        } else {
+            newMovieSearchResponse(title, fixUrl(href), TvType.Movie) {
+                this.posterUrl = poster
+                if (!quality.isNullOrBlank()) addQuality(quality)
+                rating?.let { this.score = Score.from10(it) }
+            }
+        }
     }
-}
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val document = app.get("$mainUrl?s=$query&post_type[]=post&post_type[]=tv").document
-        return document.select("article.item").mapNotNull { it.toSearchResult() }
+        val q = URLEncoder.encode(query.trim(), "UTF-8")
+        val endpoints = listOf(
+            "$mainUrl/?s=$q",
+            "$mainUrl?s=$q",
+            "$mainUrl/?s=$q&post_type[]=post&post_type[]=tv"
+        )
+
+        val out = linkedMapOf<String, SearchResponse>()
+        for (url in endpoints) {
+            val document = runCatching { app.get(url).document }.getOrNull() ?: continue
+            val items = document.select(
+                "div.result-item article, div.result-item, article.item, div.items article.item"
+            ).mapNotNull { it.toSearchResult() }
+            items.forEach { out[it.url] = it }
+            if (out.isNotEmpty()) break
+        }
+        return out.values.toList()
     }
 
     private fun Element.toRecommendResult(): SearchResponse? {
