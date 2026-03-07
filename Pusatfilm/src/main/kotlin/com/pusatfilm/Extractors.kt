@@ -639,157 +639,157 @@ open class EmturbovidExtractor : ExtractorApi() {
     }
 
     private fun resolveUrl(base: String, value: String): String {
-        return runCatching {
-            URI(base).resolve(value).toString()
-        }.getOrElse { value }
+        return runCatching { URI(base).resolve(value).toString() }.getOrElse { value }
     }
 
-    private fun extractAllM3u8Candidates(html: String, doc: Document, pageUrl: String): List<String> {
-        val found = linkedSetOf<String>()
+    private fun extractMasterCandidate(html: String, doc: Document, pageUrl: String): String? {
+        val raw = doc.selectFirst("#video_player")?.attr("data-hash")?.takeIf { it.isNotBlank() }
+            ?: Regex("""var\s+urlPlay\s*=\s*['"]([^'"]+)['"]""", RegexOption.IGNORE_CASE)
+                .find(html)?.groupValues?.getOrNull(1)
+            ?: Regex("""["']file["']\s*:\s*["']([^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE)
+                .find(html)?.groupValues?.getOrNull(1)
 
-        fun add(raw: String?) {
-            val v = raw?.trim()?.trim('"', '\'', ' ')
-            if (v.isNullOrBlank()) return
-            if (!v.contains(".m3u8", ignoreCase = true) && !v.contains("/data", ignoreCase = true)) return
-            found += if (isAbsoluteUrl(v)) v else resolveUrl(pageUrl, v)
-        }
-
-        // Common patterns
-        Regex("""https?:\/\/[^\s"'\\]+\.m3u8[^\s"'\\]*""", RegexOption.IGNORE_CASE)
-            .findAll(html)
-            .forEach { add(it.value) }
-
-        Regex("""["']([^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE)
-            .findAll(html)
-            .forEach { add(it.groupValues.getOrNull(1)) }
-
-        Regex("""file\s*:\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
-            .findAll(html)
-            .forEach { add(it.groupValues.getOrNull(1)) }
-
-        Regex("""src\s*:\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
-            .findAll(html)
-            .forEach { add(it.groupValues.getOrNull(1)) }
-
-        Regex("""urlPlay\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
-            .findAll(html)
-            .forEach { add(it.groupValues.getOrNull(1)) }
-
-        Regex("""data-hash\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
-            .findAll(html)
-            .forEach { add(it.groupValues.getOrNull(1)) }
-
-        doc.select("[src]").forEach { add(it.attr("src")) }
-        doc.select("[data-src]").forEach { add(it.attr("data-src")) }
-        doc.select("[data-hash]").forEach { add(it.attr("data-hash")) }
-
-        return found.toList()
+        raw ?: return null
+        return if (isAbsoluteUrl(raw)) raw else resolveUrl(pageUrl, raw)
     }
 
-    private fun scoreCandidate(url: String): Int {
-        val u = url.lowercase()
-        return when {
-            "cdn1.turboviplay.com/data" in u -> 100
-            "cdn." in u && "turboviplay" in u && ".m3u8" in u -> 95
-            "turboviplay.com/data" in u -> 90
-            "turbovidhls.com" in u && ".m3u8" in u -> 80
-            "turbosplayer.com" in u && "master.m3u8" in u -> 60
-            ".m3u8" in u -> 40
-            else -> 0
-        }
-    }
-
-    private suspend fun loadEmbedPage(targetUrl: String, ref: String) = runCatching {
-        val headers = mapOf(
-            "User-Agent" to mobileUa,
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "Referer" to ref
+    private suspend fun getResponse(
+        url: String,
+        referer: String,
+        origin: String
+    ) = runCatching {
+        app.get(
+            url,
+            headers = mapOf(
+                "Referer" to referer,
+                "Origin" to origin,
+                "User-Agent" to mobileUa,
+                "Accept" to "*/*"
+            ),
+            referer = referer
         )
-        app.get(targetUrl, headers = headers, referer = ref)
     }.getOrNull()
 
+    private fun parseMasterVariants(masterUrl: String, text: String): List<Pair<String, Int?>> {
+        val out = mutableListOf<Pair<String, Int?>>()
+        val lines = text.lines()
+
+        for (i in lines.indices) {
+            val line = lines[i].trim()
+            if (!line.startsWith("#EXT-X-STREAM-INF", ignoreCase = true)) continue
+
+            val height = Regex("""RESOLUTION=\d+x(\d+)""", RegexOption.IGNORE_CASE)
+                .find(line)
+                ?.groupValues?.getOrNull(1)
+                ?.toIntOrNull()
+
+            val next = lines.getOrNull(i + 1)?.trim().orEmpty()
+            if (next.isBlank() || next.startsWith("#")) continue
+
+            out += resolveUrl(masterUrl, next) to height
+        }
+
+        return out
+    }
+
+    private fun parseFirstSegment(mediaUrl: String, text: String): String? {
+        val segment = text.lines()
+            .map { it.trim() }
+            .firstOrNull { it.isNotBlank() && !it.startsWith("#") }
+            ?: return null
+
+        return resolveUrl(mediaUrl, segment)
+    }
+
+    private fun isBadSegmentContentType(contentType: String): Boolean {
+        val ct = contentType.lowercase()
+        return ct.startsWith("image/") ||
+            ct.contains("text/html") ||
+            ct.contains("application/json") ||
+            ct.contains("text/plain") ||
+            ct.contains("xml")
+    }
+
+    private suspend fun validatePlaylist(
+        playlistUrl: String,
+        referer: String,
+        origin: String
+    ): Boolean {
+        val playlistResp = getResponse(playlistUrl, referer, origin) ?: return false
+        val playlistText = playlistResp.text
+
+        if (!playlistText.contains("#EXTM3U")) return false
+
+        // Kalau master playlist, cek variant satu per satu
+        if (playlistText.contains("#EXT-X-STREAM-INF", ignoreCase = true)) {
+            val variants = parseMasterVariants(playlistUrl, playlistText)
+                .sortedByDescending { it.second ?: 0 }
+
+            for ((variantUrl, _) in variants) {
+                if (validatePlaylist(variantUrl, referer, origin)) return true
+            }
+            return false
+        }
+
+        // Media playlist harus punya segment
+        if (!playlistText.contains("#EXTINF", ignoreCase = true)) return false
+
+        val firstSegment = parseFirstSegment(playlistUrl, playlistText) ?: return false
+        val segResp = getResponse(firstSegment, referer, origin) ?: return false
+
+        val contentType = segResp.headers["content-type"]?.lowercase().orEmpty()
+
+        // Ini inti fix-nya: kalau segment ternyata image/png seperti hasil HTTP Toolkit, tolak
+        if (isBadSegmentContentType(contentType)) return false
+
+        return true
+    }
+
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val fallbackRef = "https://kotakajaib.me/"
-        val initialRef = referer ?: fallbackRef
+        val entryRef = referer ?: "https://kotakajaib.me/"
 
-        // 1) buka page awal
-        var page = loadEmbedPage(url, initialRef)
+        val page = runCatching {
+            app.get(
+                url,
+                headers = mapOf(
+                    "User-Agent" to mobileUa,
+                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+                ),
+                referer = entryRef
+            )
+        }.getOrNull() ?: return null
 
-        // 2) retry pakai referer kotakajaib kalau perlu
-        if (page == null) {
-            page = loadEmbedPage(url, fallbackRef)
-        }
+        val pageUrl = page.url
+        val pageBase = getBaseUrl(pageUrl) ?: mainUrl
+        val playbackReferer = normalizeReferer(pageUrl) ?: "$pageBase/"
 
-        if (page == null) return null
+        val masterUrl = extractMasterCandidate(page.text, page.document, pageUrl) ?: return null
 
-        // 3) kalau page awal belum sampai ke host final, coba akses ulang pakai URL final hasil redirect
-        // biasanya emturbovid -> turbovidhls
-        val finalPageUrl = page.url
-        val finalPageBase = getBaseUrl(finalPageUrl) ?: mainUrl
-
-        val html = page.text
-        val doc = page.document
-
-        // 4) cari kandidat stream dari HTML
-        val candidates = extractAllM3u8Candidates(html, doc, finalPageUrl)
-            .sortedByDescending { scoreCandidate(it) }
-
-        var best = candidates.firstOrNull()
-
-        // 5) kalau yang ketemu masih /t/..., buka sekali lagi halaman itu dan extract ulang
-        if (!best.isNullOrBlank() && !best.contains(".m3u8", ignoreCase = true) && best.contains("/t/", ignoreCase = true)) {
-            val nestedPage = loadEmbedPage(best, fallbackRef)
-            if (nestedPage != null) {
-                val nestedCandidates = extractAllM3u8Candidates(
-                    nestedPage.text,
-                    nestedPage.document,
-                    nestedPage.url
-                ).sortedByDescending { scoreCandidate(it) }
-
-                if (nestedCandidates.isNotEmpty()) {
-                    best = nestedCandidates.first()
-                }
-            }
-        }
-
-        // 6) fallback: kalau HTML tidak berisi m3u8, coba bentuk pattern umum data3 dari id /t/{id}
-        if (best.isNullOrBlank()) {
-            val videoId = Regex("""/t/([A-Za-z0-9]+)""")
-                .find(finalPageUrl)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?: Regex("""/t/([A-Za-z0-9]+)""")
-                    .find(url)
-                    ?.groupValues
-                    ?.getOrNull(1)
-
-            if (!videoId.isNullOrBlank()) {
-                best = "https://cdn1.turboviplay.com/data3/$videoId/$videoId.m3u8"
-            }
-        }
-
-        if (best.isNullOrBlank()) return null
-
-        // Playback harus tetap pakai referer page, bukan referer master variant g239/g263
-        val playbackReferer = normalizeReferer(finalPageUrl) ?: normalizeReferer(finalPageBase) ?: "$mainUrl/"
-        val playbackOrigin = finalPageBase
-
-        val streamHeaders = linkedMapOf(
-            "Referer" to playbackReferer,
-            "Origin" to playbackOrigin,
-            "User-Agent" to mobileUa,
-            "Accept" to "*/*"
+        val ok = validatePlaylist(
+            playlistUrl = masterUrl,
+            referer = playbackReferer,
+            origin = pageBase
         )
+
+        if (!ok) {
+            // Playlist host ini terbukti bukan stream video valid untuk ExoPlayer
+            return null
+        }
 
         return listOf(
             newExtractorLink(
                 source = name,
                 name = name,
-                url = best,
+                url = masterUrl,
                 type = ExtractorLinkType.M3U8
             ) {
                 this.referer = playbackReferer
-                this.headers = streamHeaders
+                this.headers = mapOf(
+                    "Referer" to playbackReferer,
+                    "Origin" to pageBase,
+                    "User-Agent" to mobileUa,
+                    "Accept" to "*/*"
+                )
                 this.quality = Qualities.Unknown.value
             }
         )
