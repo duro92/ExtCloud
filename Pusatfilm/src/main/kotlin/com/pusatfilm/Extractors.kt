@@ -722,13 +722,13 @@ open class EmturbovidExtractor : ExtractorApi() {
     private data class PlayableVariant(
         val url: String,
         val quality: Int?,
-        val referer: String?,
+        val referer: String,
     )
 
     private fun qualityPriority(quality: Int?): Int {
         val q = quality ?: return 0
-        // Prefer medium quality for stability (often less likely to be throttled than max bitrate).
-        val target = 720
+        // Prefer lower/medium quality for stability on aggressive CDN throttling.
+        val target = 480
         return -kotlin.math.abs(q - target)
     }
 
@@ -779,9 +779,6 @@ open class EmturbovidExtractor : ExtractorApi() {
         if (validateByReferer(masterUrl)) {
             return PlayableVariant(variantUrl, quality, masterUrl)
         }
-        if (validateByReferer(null)) {
-            return PlayableVariant(variantUrl, quality, null)
-        }
         return null
     }
 
@@ -807,11 +804,11 @@ open class EmturbovidExtractor : ExtractorApi() {
 
         val masterResp = getResponse(
             url = masterUrl,
-            referer = null,
+            referer = pageReferer,
             origin = pageBase
         ) ?: getResponse(
             url = masterUrl,
-            referer = pageReferer,
+            referer = masterUrl,
             origin = pageBase
         ) ?: return null
 
@@ -819,6 +816,7 @@ open class EmturbovidExtractor : ExtractorApi() {
         if (!masterText.contains("#EXTM3U", ignoreCase = true)) return null
 
         val variantHeaders = mapOf(
+            "Referer" to pageReferer,
             "Origin" to pageBase,
             "User-Agent" to mobileUa,
             "Accept" to "*/*",
@@ -847,18 +845,14 @@ open class EmturbovidExtractor : ExtractorApi() {
 
             if (playable.isNotEmpty()) {
                 return playable.map { v ->
-                    val headers = if (v.referer.isNullOrBlank()) {
-                        variantHeaders
-                    } else {
-                        variantHeaders + ("Referer" to v.referer)
-                    }
+                    val headers = variantHeaders + ("Referer" to v.referer)
                     newExtractorLink(
                         source = name,
                         name = name,
                         url = v.url,
                         type = ExtractorLinkType.M3U8
                     ) {
-                        v.referer?.let { this.referer = it }
+                        this.referer = v.referer
                         this.headers = headers
                         this.quality = v.quality ?: Qualities.Unknown.value
                     }
@@ -872,6 +866,7 @@ open class EmturbovidExtractor : ExtractorApi() {
                     url = variantUrl,
                     type = ExtractorLinkType.M3U8
                 ) {
+                    this.referer = pageReferer
                     this.headers = variantHeaders
                     this.quality = height ?: Qualities.Unknown.value
                 }
@@ -885,6 +880,7 @@ open class EmturbovidExtractor : ExtractorApi() {
                 url = masterUrl,
                 type = ExtractorLinkType.M3U8
             ) {
+                this.referer = pageReferer
                 this.headers = variantHeaders
                 this.quality = Qualities.Unknown.value
             }
