@@ -21,21 +21,42 @@ open class Jeniusplay : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val document = app.get(url, referer = "$mainUrl/").document
+        val pageRef = if (url.contains("/video/")) url.substringBefore("#") else "$mainUrl/"
+        val document = app.get(url, referer = referer ?: "$mainUrl/").document
         val hash = url.split("/").last().substringAfter("data=")
 
         val m3uLink = app.post(
             url = "$mainUrl/player/index.php?data=$hash&do=getVideo",
-            data = mapOf("hash" to hash, "r" to "$referer"),
-            referer = url,
-            headers = mapOf("X-Requested-With" to "XMLHttpRequest")
-        ).parsed<ResponseSource>().videoSource
+            data = mapOf("hash" to hash, "r" to pageRef),
+            referer = pageRef,
+            headers = mapOf(
+                "X-Requested-With" to "XMLHttpRequest",
+                "Origin" to mainUrl,
+                "Referer" to pageRef
+            )
+        ).parsed<ResponseSource>().securedLink
+            ?: app.post(
+                url = "$mainUrl/player/index.php?data=$hash&do=getVideo",
+                data = mapOf("hash" to hash, "r" to pageRef),
+                referer = pageRef,
+                headers = mapOf("X-Requested-With" to "XMLHttpRequest")
+            ).parsed<ResponseSource>().videoSource
 
-        M3u8Helper.generateM3u8(
-            this.name,
-            m3uLink,
-            url,
-        ).forEach(callback)
+        callback.invoke(
+            newExtractorLink(
+                name = "Jenius AUTO",
+                source = this.name,
+                url = m3uLink,
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = pageRef
+                this.headers = mapOf(
+                    "Origin" to mainUrl,
+                    "Referer" to pageRef,
+                    "Accept" to "*/*"
+                )
+            }
+        )
 
 
         document.select("script").map { script ->
@@ -44,7 +65,7 @@ open class Jeniusplay : ExtractorApi() {
                     getAndUnpack(script.data()).substringAfter("\"tracks\":[").substringBefore("],")
                 tryParseJson<List<Tracks>>("[$subData]")?.map { subtitle ->
                     subtitleCallback.invoke(
-                        newSubtitleFile(
+                        SubtitleFile(
                             getLanguage(subtitle.label ?: ""),
                             subtitle.file
                         )
