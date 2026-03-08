@@ -102,7 +102,7 @@ class IdlixPlayer : ExtractorApi() {
                             ?: "AUTO"
                     }
 
-                    line.isNotBlank() && !line.startsWith("#") -> {
+                    line.isNotBlank() && !line.startsWith("#") && pendingLabel != null -> {
                         val variantUrl = runCatching { URI(masterUrl).resolve(line).toString() }
                             .getOrElse { line }
                         val label = pendingLabel ?: "AUTO"
