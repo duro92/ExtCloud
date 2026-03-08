@@ -9,7 +9,6 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.getAndUnpack
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import java.net.URI
 
 class IdlixPlayer : ExtractorApi() {
 
@@ -18,8 +17,8 @@ class IdlixPlayer : ExtractorApi() {
     override val requiresReferer = true
 
     private val UA =
-        "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
 
     override suspend fun getUrl(
         url: String,
@@ -27,13 +26,13 @@ class IdlixPlayer : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        // Referer paling aman untuk CDN Jeniusplay
-        val pageRef = "$mainUrl/"
+        // Pakai page URL asli agar token/r param sinkron dengan player bawaan.
+        val pageRef = if (url.contains("/video/")) url.substringBefore("#") else "$mainUrl/"
 
         // Ambil halaman embed (cookie awal + subtitle)
         val document = app.get(
             url = url,
-            referer = pageRef,
+            referer = referer ?: "$mainUrl/",
             headers = mapOf(
                 "User-Agent" to UA,
                 "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -78,66 +77,17 @@ class IdlixPlayer : ExtractorApi() {
             "Accept-Language" to "en-US,en;q=0.9",
             "Connection" to "keep-alive"
         )
-        val masterUrl = runCatching { URI(mainUrl).resolve(m3u8Url).toString() }
-            .getOrElse { m3u8Url }
-
-        // Parse master playlist supaya URL relatif (/m3/...) jadi absolut.
-        val masterBody = runCatching {
-            app.get(
-                url = masterUrl,
-                referer = pageRef,
-                headers = streamHeaders
-            ).text
-        }.getOrNull()
-
-        var hasVariants = false
-        if (!masterBody.isNullOrBlank() && masterBody.contains("#EXTM3U")) {
-            var pendingLabel: String? = null
-            masterBody.lineSequence().forEach { raw ->
-                val line = raw.trim()
-                when {
-                    line.startsWith("#EXT-X-STREAM-INF", true) -> {
-                        pendingLabel = Regex("NAME=\"([^\"]+)\"").find(line)?.groupValues?.getOrNull(1)
-                            ?: Regex("RESOLUTION=(\\d+x\\d+)").find(line)?.groupValues?.getOrNull(1)
-                            ?: "AUTO"
-                    }
-
-                    line.isNotBlank() && !line.startsWith("#") && pendingLabel != null -> {
-                        val variantUrl = runCatching { URI(masterUrl).resolve(line).toString() }
-                            .getOrElse { line }
-                        val label = pendingLabel ?: "AUTO"
-                        callback.invoke(
-                            newExtractorLink(
-                                name = "Jenius $label",
-                                source = name,
-                                url = variantUrl,
-                                type = ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = pageRef
-                                this.headers = streamHeaders
-                            }
-                        )
-                        hasVariants = true
-                        pendingLabel = null
-                    }
-                }
+        callback.invoke(
+            newExtractorLink(
+                name = "Jenius AUTO",
+                source = name,
+                url = m3u8Url,
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = pageRef
+                this.headers = streamHeaders
             }
-        }
-
-        // Fallback: tetap kirim master URL kalau parsing gagal.
-        if (!hasVariants) {
-            callback.invoke(
-                newExtractorLink(
-                    name = "Jenius AUTO",
-                    source = name,
-                    url = masterUrl,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = pageRef
-                    this.headers = streamHeaders
-                }
-            )
-        }
+        )
 
         // ================= SUBTITLE =================
         document.select("script").forEach { script ->
