@@ -863,6 +863,42 @@ class PlayhydraxExtractor : ExtractorApi() {
         return u.contains("m3u8") || Regex("""\.(mp4|mkv|webm)(\?|$)""", RegexOption.IGNORE_CASE).containsMatchIn(url)
     }
 
+    private fun looksLikeMp4(bytes: ByteArray): Boolean {
+        if (bytes.size < 8) return false
+        return bytes[4] == 0x66.toByte() &&
+            bytes[5] == 0x74.toByte() &&
+            bytes[6] == 0x79.toByte() &&
+            bytes[7] == 0x70.toByte()
+    }
+
+    private suspend fun detectPlayableType(
+        url: String,
+        referer: String
+    ): ExtractorLinkType? {
+        if (url.contains("m3u8", true)) return ExtractorLinkType.M3U8
+        if (Regex("""\.(mp4|mkv|webm)(\?|$)""", RegexOption.IGNORE_CASE).containsMatchIn(url)) return null
+
+        val probe = runCatching {
+            app.get(
+                url,
+                referer = referer,
+                headers = mapOf("Range" to "bytes=0-4095")
+            )
+        }.getOrNull() ?: return null
+
+        val contentType = (probe.headers["Content-Type"] ?: probe.headers["content-type"]).orEmpty().lowercase()
+        val headBytes = runCatching { probe.body.bytes().take(4096).toByteArray() }.getOrNull() ?: return null
+        val headText = runCatching { String(headBytes, Charsets.UTF_8) }.getOrNull().orEmpty()
+
+        if (contentType.contains("application/vnd.apple.mpegurl") || headText.contains("#EXTM3U")) {
+            return ExtractorLinkType.M3U8
+        }
+        if (contentType.contains("video/mp4") || looksLikeMp4(headBytes)) {
+            return null
+        }
+        return null
+    }
+
     private fun parseQuality(label: String?, resId: Int): Int {
         val fromLabel = Regex("""(\d{3,4})p""", RegexOption.IGNORE_CASE)
             .find(label.orEmpty())
@@ -941,17 +977,18 @@ class PlayhydraxExtractor : ExtractorApi() {
                 else -> continue
             }
             if (!emittedUrls.add(fixed)) continue
+            val hasKnownPattern = isLikelyPlayable(fixed)
+            val detectedType = detectPlayableType(fixed, pageUrl)
+            if (!hasKnownPattern && detectedType == null) continue
 
             val quality = parseQuality(item.optString("label"), item.optInt("res_id", -1))
-            val isStandard = isLikelyPlayable(fixed)
-            val baseName = if (quality == Qualities.Unknown.value) name else "$name ${quality}p"
-            val linkName = if (isStandard) baseName else "$baseName RAW"
+            val linkName = if (quality == Qualities.Unknown.value) name else "$name ${quality}p"
             val headers = mapOf(
                 "Origin" to mainUrl,
                 "Referer" to pageUrl
             )
 
-            if (fixed.contains("m3u8", true)) {
+            if (detectedType == ExtractorLinkType.M3U8 || fixed.contains("m3u8", true)) {
                 callback.invoke(
                     newExtractorLink(
                         source = "$name-$sectionName",
@@ -978,34 +1015,6 @@ class PlayhydraxExtractor : ExtractorApi() {
                 )
             }
             emitted = true
-        }
-
-        // Debug fallback: Hydrax often exposes "fristDatas" URLs without common extensions.
-        val fristDatas = section.optJSONArray("fristDatas")
-        if (fristDatas != null) {
-            for (i in 0 until fristDatas.length()) {
-                val item = fristDatas.optJSONObject(i) ?: continue
-                val fixed = item.optString("url").trim().takeIf { it.startsWith("http") } ?: continue
-                if (!emittedUrls.add(fixed)) continue
-
-                val quality = parseQuality(item.optString("label"), item.optInt("res_id", -1))
-                val linkName = if (quality == Qualities.Unknown.value) "$name FD RAW" else "$name ${quality}p FD RAW"
-                callback.invoke(
-                    newExtractorLink(
-                        source = "$name-$sectionName",
-                        name = linkName,
-                        url = fixed
-                    ) {
-                        this.referer = pageUrl
-                        this.headers = mapOf(
-                            "Origin" to mainUrl,
-                            "Referer" to pageUrl
-                        )
-                        this.quality = quality
-                    }
-                )
-                emitted = true
-            }
         }
         return emitted
     }
