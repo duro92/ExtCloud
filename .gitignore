@@ -23,3 +23,4 @@ gradle-app.setting
 
 local.properties
 .vscodetest.txt
+.gradle-user-home/
