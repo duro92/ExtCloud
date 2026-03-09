@@ -928,6 +928,7 @@ class PlayhydraxExtractor : ExtractorApi() {
         if (section == null) return false
         val sources = section.optJSONArray("sources") ?: return false
         var emitted = false
+        val emittedUrls = linkedSetOf<String>()
 
         for (i in 0 until sources.length()) {
             val item = sources.optJSONObject(i) ?: continue
@@ -939,10 +940,12 @@ class PlayhydraxExtractor : ExtractorApi() {
                 candidate.startsWith("//") -> "https:$candidate"
                 else -> continue
             }
-            if (!isLikelyPlayable(fixed)) continue
+            if (!emittedUrls.add(fixed)) continue
 
             val quality = parseQuality(item.optString("label"), item.optInt("res_id", -1))
-            val linkName = if (quality == Qualities.Unknown.value) name else "$name ${quality}p"
+            val isStandard = isLikelyPlayable(fixed)
+            val baseName = if (quality == Qualities.Unknown.value) name else "$name ${quality}p"
+            val linkName = if (isStandard) baseName else "$baseName RAW"
             val headers = mapOf(
                 "Origin" to mainUrl,
                 "Referer" to pageUrl
@@ -975,6 +978,34 @@ class PlayhydraxExtractor : ExtractorApi() {
                 )
             }
             emitted = true
+        }
+
+        // Debug fallback: Hydrax often exposes "fristDatas" URLs without common extensions.
+        val fristDatas = section.optJSONArray("fristDatas")
+        if (fristDatas != null) {
+            for (i in 0 until fristDatas.length()) {
+                val item = fristDatas.optJSONObject(i) ?: continue
+                val fixed = item.optString("url").trim().takeIf { it.startsWith("http") } ?: continue
+                if (!emittedUrls.add(fixed)) continue
+
+                val quality = parseQuality(item.optString("label"), item.optInt("res_id", -1))
+                val linkName = if (quality == Qualities.Unknown.value) "$name FD RAW" else "$name ${quality}p FD RAW"
+                callback.invoke(
+                    newExtractorLink(
+                        source = "$name-$sectionName",
+                        name = linkName,
+                        url = fixed
+                    ) {
+                        this.referer = pageUrl
+                        this.headers = mapOf(
+                            "Origin" to mainUrl,
+                            "Referer" to pageUrl
+                        )
+                        this.quality = quality
+                    }
+                )
+                emitted = true
+            }
         }
         return emitted
     }
