@@ -645,266 +645,39 @@ open class Kotakajaib : ExtractorApi() {
 open class EmturbovidExtractor : ExtractorApi() {
     override var name = "Emturbovid"
     override var mainUrl = "https://emturbovid.com"
-    override val requiresReferer = true
+    override val requiresReferer = false
 
-    private val mobileUa =
-        "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-
-    private fun getBaseUrl(url: String?): String? = runCatching {
-        if (url.isNullOrBlank()) return@runCatching null
-        val u = URI(url)
-        val scheme = u.scheme ?: return@runCatching null
-        val host = u.host ?: return@runCatching null
-        val port = if (u.port != -1) ":${u.port}" else ""
-        "$scheme://$host$port"
-    }.getOrNull()
-
-    private fun isAbsoluteUrl(url: String): Boolean {
-        return url.startsWith("http://", true) || url.startsWith("https://", true)
-    }
-
-    private fun resolveUrl(base: String, value: String): String {
-        return runCatching { URI(base).resolve(value).toString() }.getOrElse { value }
-    }
-
-    private fun extractMasterCandidate(html: String, doc: Document, pageUrl: String): String? {
-        val raw = doc.selectFirst("#video_player")?.attr("data-hash")?.takeIf { it.isNotBlank() }
-            ?: Regex("""var\s+urlPlay\s*=\s*['"]([^'"]+)['"]""", RegexOption.IGNORE_CASE)
-                .find(html)?.groupValues?.getOrNull(1)
-            ?: Regex("""["']file["']\s*:\s*["']([^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE)
-                .find(html)?.groupValues?.getOrNull(1)
-
-        raw ?: return null
-        return if (isAbsoluteUrl(raw)) raw else resolveUrl(pageUrl, raw)
-    }
-
-    private suspend fun getResponse(
-        url: String,
-        referer: String?,
-        origin: String
-    ) = runCatching {
-        val headers = linkedMapOf(
-            "Origin" to origin,
-            "User-Agent" to mobileUa,
-            "Accept" to "*/*",
-            "Accept-Language" to "en-US,en;q=0.9",
-            "Connection" to "keep-alive",
-            "Sec-Fetch-Mode" to "cors",
-            "Sec-Fetch-Site" to "cross-site"
-        )
-        if (!referer.isNullOrBlank()) {
-            headers["Referer"] = referer
+    private fun resolve(url: String, base: String): String {
+        return when {
+            url.startsWith("http://", true) || url.startsWith("https://", true) -> url
+            url.startsWith("//") -> "https:$url"
+            else -> runCatching { java.net.URI(base).resolve(url).toString() }.getOrElse { url }
         }
-        app.get(
-            url,
-            headers = headers,
-            referer = referer
-        )
-    }.getOrNull()
-
-    private fun parseMasterVariants(masterUrl: String, text: String): List<Pair<String, Int?>> {
-        val out = mutableListOf<Pair<String, Int?>>()
-        val lines = text.lines()
-
-        for (i in lines.indices) {
-            val line = lines[i].trim()
-            if (!line.startsWith("#EXT-X-STREAM-INF", ignoreCase = true)) continue
-
-            val height = Regex("""RESOLUTION=\d+x(\d+)""", RegexOption.IGNORE_CASE)
-                .find(line)
-                ?.groupValues?.getOrNull(1)
-                ?.toIntOrNull()
-
-            val next = lines.getOrNull(i + 1)?.trim().orEmpty()
-            if (next.isBlank() || next.startsWith("#")) continue
-
-            out += resolveUrl(masterUrl, next) to height
-        }
-
-        return out
-    }
-
-    private fun parseFirstMediaEntry(playlistUrl: String, text: String): String? {
-        val line = text.lineSequence()
-            .map { it.trim() }
-            .firstOrNull { it.isNotBlank() && !it.startsWith("#") }
-            ?: return null
-        return resolveUrl(playlistUrl, line)
-    }
-
-    private fun isLikelyBlockedContentType(contentType: String?): Boolean {
-        val ct = contentType?.lowercase().orEmpty()
-        if (ct.isBlank()) return false
-        return ct.contains("text/html") ||
-            ct.contains("application/json") ||
-            ct.contains("text/plain") ||
-            ct.contains("xml") ||
-            ct.startsWith("image/")
-    }
-
-    private data class PlayableVariant(
-        val url: String,
-        val quality: Int?,
-        val referer: String,
-    )
-
-    private fun qualityPriority(quality: Int?): Int {
-        val q = quality ?: return 0
-        // Prefer lower/medium quality for stability on aggressive CDN throttling.
-        val target = 480
-        return -kotlin.math.abs(q - target)
-    }
-
-    private suspend fun validateVariant(
-        variantUrl: String,
-        quality: Int?,
-        pageReferer: String,
-        masterUrl: String,
-        origin: String
-    ): PlayableVariant? {
-        suspend fun validateByReferer(ref: String?): Boolean {
-            val playlistResp = getResponse(
-                url = variantUrl,
-                referer = ref,
-                origin = origin
-            ) ?: return false
-
-            val playlistText = playlistResp.text
-            if (!playlistText.contains("#EXTM3U", ignoreCase = true)) return false
-
-            val mediaPlaylistUrl = if (playlistText.contains("#EXT-X-STREAM-INF", ignoreCase = true)) {
-                parseMasterVariants(variantUrl, playlistText)
-                    .maxByOrNull { it.second ?: 0 }
-                    ?.first
-                    ?: return false
-            } else {
-                variantUrl
-            }
-
-            val mediaText = if (mediaPlaylistUrl == variantUrl) {
-                playlistText
-            } else {
-                val mediaResp = getResponse(mediaPlaylistUrl, ref, origin) ?: return false
-                mediaResp.text
-            }
-            if (!mediaText.contains("#EXTM3U", ignoreCase = true)) return false
-
-            val firstSeg = parseFirstMediaEntry(mediaPlaylistUrl, mediaText) ?: return false
-            val segResp = getResponse(firstSeg, ref, origin) ?: return false
-            if (isLikelyBlockedContentType(segResp.headers["content-type"])) return false
-
-            return true
-        }
-
-        if (validateByReferer(pageReferer)) {
-            return PlayableVariant(variantUrl, quality, pageReferer)
-        }
-        if (validateByReferer(masterUrl)) {
-            return PlayableVariant(variantUrl, quality, masterUrl)
-        }
-        return null
     }
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val entryRef = referer ?: "https://kotakajaib.me/"
+        val response = app.get(url, referer = referer ?: "$mainUrl/")
+        val playerScript = response.document
+            .selectXpath("//script[contains(text(),'var urlPlay')]")
+            .html()
 
-        val page = runCatching {
-            app.get(
-                url,
-                headers = mapOf(
-                    "User-Agent" to mobileUa,
-                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
-                ),
-                referer = entryRef
-            )
-        }.getOrNull() ?: return null
+        if (playerScript.isBlank()) return null
 
-        val pageUrl = page.url
-        val pageBase = getBaseUrl(pageUrl) ?: mainUrl
-        val pageReferer = pageUrl
+        val m3u8Raw = playerScript
+            .substringAfter("var urlPlay = '")
+            .substringBefore("'")
+            .trim()
+            .takeIf { it.isNotBlank() } ?: return null
 
-        val masterUrl = extractMasterCandidate(page.text, page.document, pageUrl) ?: return null
-
-        val masterResp = getResponse(
-            url = masterUrl,
-            referer = pageReferer,
-            origin = pageBase
-        ) ?: getResponse(
-            url = masterUrl,
-            referer = masterUrl,
-            origin = pageBase
-        ) ?: return null
-
-        val masterText = masterResp.text
-        if (!masterText.contains("#EXTM3U", ignoreCase = true)) return null
-
-        val variantHeaders = mapOf(
-            "Referer" to pageReferer,
-            "Origin" to pageBase,
-            "User-Agent" to mobileUa,
-            "Accept" to "*/*",
-            "Accept-Language" to "en-US,en;q=0.9",
-            "Connection" to "keep-alive",
-            "Sec-Fetch-Mode" to "cors",
-            "Sec-Fetch-Site" to "cross-site"
-        )
-
-        val variants = parseMasterVariants(masterUrl, masterText)
-            .distinctBy { it.first }
-            .sortedByDescending { qualityPriority(it.second) }
-
-        if (variants.isNotEmpty()) {
-            val playable = mutableListOf<PlayableVariant>()
-            for ((variantUrl, quality) in variants) {
-                val ok = validateVariant(
-                    variantUrl = variantUrl,
-                    quality = quality,
-                    pageReferer = pageReferer,
-                    masterUrl = masterUrl,
-                    origin = pageBase
-                )
-                if (ok != null) playable += ok
-            }
-
-            if (playable.isNotEmpty()) {
-                return playable.map { v ->
-                    val headers = variantHeaders + ("Referer" to v.referer)
-                    newExtractorLink(
-                        source = name,
-                        name = name,
-                        url = v.url,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = v.referer
-                        this.headers = headers
-                        this.quality = v.quality ?: Qualities.Unknown.value
-                    }
-                }
-            }
-
-            return variants.map { (variantUrl, height) ->
-                newExtractorLink(
-                    source = name,
-                    name = name,
-                    url = variantUrl,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = pageReferer
-                    this.headers = variantHeaders
-                    this.quality = height ?: Qualities.Unknown.value
-                }
-            }
-        }
-
+        val m3u8Url = resolve(m3u8Raw, response.url)
         return listOf(
             newExtractorLink(
                 source = name,
                 name = name,
-                url = masterUrl,
+                url = m3u8Url,
                 type = ExtractorLinkType.M3U8
             ) {
-                this.referer = pageReferer
-                this.headers = variantHeaders
+                this.referer = response.url
                 this.quality = Qualities.Unknown.value
             }
         )
