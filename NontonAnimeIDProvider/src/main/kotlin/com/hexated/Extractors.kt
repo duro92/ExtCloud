@@ -220,6 +220,16 @@ class KotakAnimeidLink : KotakAnimeidBase() {
     override val mainUrl = "https://kotakanimeid.link"
 }
 
+class KotakAnimeidS1 : KotakAnimeidBase() {
+    override val name = "KotakAnimeid"
+    override val mainUrl = "https://s1.kotakanimeid.link"
+}
+
+class KotakAnimeidS2 : KotakAnimeidBase() {
+    override val name = "KotakAnimeid"
+    override val mainUrl = "https://s2.kotakanimeid.link"
+}
+
 class Vidhidepre : Filesim() {
     override val name = "Vidhidepre"
     override var mainUrl = "https://vidhidepre.com"
@@ -251,6 +261,12 @@ private suspend fun extractScriptSources(
         if (data.contains("eval(function(p,a,c,k,e,d)")) {
             val unpacked = getAndUnpack(data)
             sources.addAll(buildLinksFromUrls(collectStreamUrls(unpacked), referer, origin))
+            Regex("""(?:file|src)\s*:\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+                .findAll(unpacked)
+                .map { it.groupValues[1] }
+                .forEach { direct ->
+                    sources.addAll(buildLinksFromUrls(listOf(direct), referer, origin))
+                }
             val src = unpacked.substringAfter("sources:[").substringBefore("]")
             tryParseJson<List<ResponseSource>>("[$src]")?.forEach { source ->
                 sources.add(
@@ -272,6 +288,12 @@ private suspend fun extractScriptSources(
             }
         } else if (data.contains("\"sources\":[")) {
             sources.addAll(buildLinksFromUrls(collectStreamUrls(data), referer, origin))
+            Regex("""(?:file|src)\s*:\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+                .findAll(data)
+                .map { it.groupValues[1] }
+                .forEach { direct ->
+                    sources.addAll(buildLinksFromUrls(listOf(direct), referer, origin))
+                }
             val src = data.substringAfter("\"sources\":[").substringBefore("]")
             tryParseJson<List<ResponseSource>>("[$src]")?.forEach { source ->
                 sources.add(
@@ -319,6 +341,25 @@ private fun collectStreamUrls(text: String): List<String> {
     patternRelative.findAll(cleaned).forEach { match ->
         urls.add(normalizeUrl(match.value))
     }
+
+    // Some KotakAnimeID embeds use signed Google "videoplayback" URLs without file extension.
+    val patternGoogleVideo = Regex(
+        """https?://[^\s"'\\]+/videoplayback\?[^\s"'\\]+""",
+        RegexOption.IGNORE_CASE
+    )
+    patternGoogleVideo.findAll(cleaned).forEach { match ->
+        urls.add(match.value)
+    }
+
+    // Generic signed stream endpoints often carry mime/video hints in query.
+    val patternQueryStream = Regex(
+        """https?://[^\s"'\\]+\?(?:[^\s"'\\]*&)?(?:mime=video|source=|itag=|dur=)[^\s"'\\]*""",
+        RegexOption.IGNORE_CASE
+    )
+    patternQueryStream.findAll(cleaned).forEach { match ->
+        urls.add(match.value)
+    }
+
     return urls.toList()
 }
 
@@ -517,11 +558,7 @@ private fun originOf(url: String): String {
 
 private fun preferredKotakReferer(url: String): String {
     val parsed = URL(url)
-    return if (parsed.host.endsWith("kotakanimeid.link")) {
-        "${parsed.protocol}://s1.kotakanimeid.link/"
-    } else {
-        "${parsed.protocol}://${parsed.host}/"
-    }
+    return "${parsed.protocol}://${parsed.host}/"
 }
 
 private data class ResponseSource(
