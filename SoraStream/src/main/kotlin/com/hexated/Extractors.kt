@@ -21,24 +21,40 @@ open class Jeniusplay2 : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val document = app.get(url, referer = "$mainUrl/").document
+        val pageRef = if (url.contains("/video/")) url.substringBefore("#") else "$mainUrl/"
+        val document = app.get(url, referer = referer ?: "$mainUrl/").document
         val hash = url.split("/").last().substringAfter("data=")
 
         val m3uLink = app.post(
             url = "$mainUrl/player/index.php?data=$hash&do=getVideo",
-            data = mapOf("hash" to hash, "r" to "$referer"),
-            referer = url,
-            headers = mapOf("X-Requested-With" to "XMLHttpRequest")
-        ).parsed<ResponseSource>().videoSource
+            data = mapOf("hash" to hash, "r" to pageRef),
+            referer = pageRef,
+            headers = mapOf(
+                "X-Requested-With" to "XMLHttpRequest",
+                "Origin" to mainUrl,
+                "Referer" to pageRef
+            )
+        ).parsed<ResponseSource>().securedLink
+            ?: app.post(
+                url = "$mainUrl/player/index.php?data=$hash&do=getVideo",
+                data = mapOf("hash" to hash, "r" to pageRef),
+                referer = pageRef,
+                headers = mapOf("X-Requested-With" to "XMLHttpRequest")
+            ).parsed<ResponseSource>().videoSource
 
         callback.invoke(
             newExtractorLink(
-                this.name,
-                this.name,
-                m3uLink,
-                ExtractorLinkType.M3U8
+                name = "Jenius AUTO",
+                source = this.name,
+                url = m3uLink,
+                type = ExtractorLinkType.M3U8
             ) {
-                this.referer = url
+                this.referer = pageRef
+                this.headers = mapOf(
+                    "Origin" to mainUrl,
+                    "Referer" to pageRef,
+                    "Accept" to "*/*"
+                )
             }
         )
 

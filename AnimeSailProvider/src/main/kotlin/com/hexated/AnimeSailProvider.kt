@@ -160,85 +160,106 @@ class AnimeSailProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-
         val document = request(data).document
+        val playerPath = "$mainUrl/utils/player/"
 
-        document.select(".mobius > .mirror > option").amap {
+        document.select(".mobius > .mirror > option").amap { element ->
             safeApiCall {
-                val iframe = fixUrl(
-                    Jsoup.parse(base64Decode(it.attr("data-em"))).select("iframe").attr("src")
-                )
-                val quality = getIndexQuality(it.text())
-                when {
-                    iframe.startsWith("$mainUrl/utils/player/kodir2") -> request(
-                        iframe,
-                        ref = data
-                    ).text.substringAfter("= `").substringBefore("`;")
-                        .let {
-                            val link = Jsoup.parse(it).select("source").last()?.attr("src")
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = name,
-                                    name = name,
-                                    url = link ?: return@let,
-                                    INFER_TYPE
-                                ) {
-                                    referer = mainUrl
-                                    this.quality = quality
-                                }
-                            )
-                        }
+                val encodedData = element.attr("data-em")
+                if (encodedData.isBlank()) return@safeApiCall
 
-                    iframe.startsWith("$mainUrl/utils/player/arch/") || iframe.startsWith("$mainUrl/utils/player/race/") || iframe.startsWith(
-                        "$mainUrl/utils/player/hexupload/"
-                    ) || iframe.startsWith("$mainUrl/utils/player/pomf/")
-                        -> request(iframe, ref = data).document.select("source").attr("src")
-                        .let { link ->
-                            val source =
-                                when {
-                                    iframe.contains("/arch/") -> "Arch"
-                                    iframe.contains("/race/") -> "Race"
-                                    iframe.contains("/hexupload/") -> "Hexupload"
-                                    iframe.contains("/pomf/") -> "Pomf"
-                                    else -> name
-                                }
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = source,
-                                    name = source,
-                                    url = link,
-                                    INFER_TYPE
-                                ) {
-                                    referer = mainUrl
-                                    this.quality = quality
-                                }
-                            )
-                        }
-                    //                    skip for now
-                    //                    iframe.startsWith("$mainUrl/utils/player/fichan/") -> ""
-                    //                    iframe.startsWith("$mainUrl/utils/player/blogger/") -> ""
-                    iframe.startsWith("https://aghanim.xyz/tools/redirect/") -> {
-                        val link = "https://rasa-cintaku-semakin-berantai.xyz/v/${
-                            iframe.substringAfter("id=").substringBefore("&token")
-                        }"
-                        loadFixedExtractor(link, quality, mainUrl, subtitleCallback, callback)
+                val iframeSrc = decodeIframeFromDataEm(encodedData) ?: return@safeApiCall
+                val iframe = fixUrl(iframeSrc)
+                if (iframe.contains("statistic") || iframe.isBlank()) return@safeApiCall
+
+                val rawText = element.text().trim()
+                val quality = getIndexQuality(rawText)
+
+                val serverName = rawText.split(" ").firstOrNull()?.replaceFirstChar {
+                    if (it.isLowerCase()) it.titlecase() else it.toString()
+                } ?: name
+
+                when {
+                    iframe.endsWith(".mp4", ignoreCase = true) || iframe.endsWith(".m3u8", ignoreCase = true) -> {
+                        callback.invoke(
+                            newExtractorLink(
+                                source = serverName,
+                                name = serverName,
+                                url = iframe,
+                                type = if (iframe.endsWith(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) {
+                                referer = mainUrl
+                                this.quality = quality
+                            }
+                        )
                     }
 
-                    iframe.startsWith("$mainUrl/utils/player/framezilla/") || iframe.startsWith("https://uservideo.xyz") -> {
-                        request(iframe, ref = data).document.select("iframe").attr("src")
-                            .let { link ->
-                                loadFixedExtractor(
-                                    fixUrl(link),
-                                    quality,
-                                    mainUrl,
-                                    subtitleCallback,
-                                    callback
-                                )
-                            }
+                    iframe.contains("${playerPath}popup") -> {
+                        val encodedUrl = iframe.substringAfter("url=").substringBefore("&")
+                        if (encodedUrl.isNotBlank()) {
+                            val realUrl = java.net.URLDecoder.decode(encodedUrl, "UTF-8")
+                            loadFixedExtractor(realUrl, serverName, quality, mainUrl, subtitleCallback, callback)
+                        }
+                    }
+
+                    iframe.contains("player-kodir.aghanim.xyz") || iframe.contains("${playerPath}kodir2") -> {
+                        val res = request(iframe, ref = data).text
+                        var link = Jsoup.parse(res.substringAfter("= `", "").substringBefore("`;", ""))
+                            .select("source").last()?.attr("src")
+
+                        if (link.isNullOrBlank()) {
+                            link = Jsoup.parse(res).select("source").attr("src")
+                        }
+
+                        if (!link.isNullOrBlank()) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = serverName,
+                                    name = serverName,
+                                    url = link,
+                                    type = INFER_TYPE
+                                ) {
+                                    referer = iframe
+                                    this.quality = quality
+                                }
+                            )
+                        }
+                    }
+
+                    iframe.contains("${playerPath}framezilla") || iframe.contains("uservideo.xyz") -> {
+                        val doc = request(iframe, ref = data).document
+                        val innerLink = doc.select("iframe").attr("src")
+                        if (innerLink.isNotBlank()) {
+                            loadFixedExtractor(fixUrl(innerLink), serverName, quality, mainUrl, subtitleCallback, callback)
+                        }
+                    }
+
+                    iframe.contains("aghanim.xyz/tools/redirect/") -> {
+                        val id = iframe.substringAfter("id=").substringBefore("&token")
+                        val link = "https://rasa-cintaku-semakin-berantai.xyz/v/$id"
+                        loadFixedExtractor(link, serverName, quality, mainUrl, subtitleCallback, callback)
+                    }
+
+                    iframe.contains(playerPath) -> {
+                        val doc = request(iframe, ref = data).document
+                        val link = doc.select("source").attr("src")
+                        if (link.isNotBlank()) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = serverName,
+                                    name = serverName,
+                                    url = link,
+                                    type = INFER_TYPE
+                                ) {
+                                    referer = iframe
+                                    this.quality = quality
+                                }
+                            )
+                        }
                     }
 
                     else -> {
-                        loadFixedExtractor(iframe, quality, mainUrl, subtitleCallback, callback)
+                        loadFixedExtractor(iframe, serverName, quality, mainUrl, subtitleCallback, callback)
                     }
                 }
             }
@@ -247,26 +268,35 @@ class AnimeSailProvider : MainAPI() {
         return true
     }
 
+    private fun decodeIframeFromDataEm(encodedData: String): String? {
+        val decoded = runCatching { base64Decode(encodedData.trim()) }.getOrNull() ?: return null
+        return Jsoup.parse(decoded).selectFirst("iframe")?.attr("src")?.trim()?.takeIf { it.isNotBlank() }
+    }
+
     private suspend fun loadFixedExtractor(
         url: String,
+        serverName: String,
         quality: Int?,
         referer: String? = null,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
         loadExtractor(url, referer, subtitleCallback) { link ->
+            val finalName =
+                if (serverName.equals(link.name, ignoreCase = true)) link.name else "$serverName - ${link.name}"
+
             runBlocking {
                 callback.invoke(
                     newExtractorLink(
                         source = link.name,
-                        name = link.name,
+                        name = finalName,
                         url = link.url,
-                        INFER_TYPE
+                        type = link.type
                     ) {
-                        this.referer = mainUrl
-                        this.quality = if (link.type == ExtractorLinkType.M3U8) link.quality else quality
-                            ?: Qualities.Unknown.value
-                        this.type = link.type
+                        this.referer = referer ?: mainUrl
+                        this.quality =
+                            if (link.type == ExtractorLinkType.M3U8) link.quality else quality
+                                ?: Qualities.Unknown.value
                         this.headers = link.headers
                         this.extractorData = link.extractorData
                     }

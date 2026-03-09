@@ -12,5 +12,6 @@ class IdlixProviderPlugin: Plugin() {
     override fun load(context: Context) {
         IdlixProvider.context = context
         registerMainAPI(IdlixProvider())  
+        registerExtractorAPI(Jeniusplay())
     }
 }
