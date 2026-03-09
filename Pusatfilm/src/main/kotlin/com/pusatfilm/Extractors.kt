@@ -17,6 +17,7 @@ import java.security.MessageDigest
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import org.json.JSONObject
 
 private data class CryptoJsAesJson(
     val ct: String? = null,
@@ -705,6 +706,61 @@ open class EmturbovidExtractor : ExtractorApi() {
         return out
     }
 
+    private fun parseFirstMediaEntry(playlistUrl: String, text: String): String? {
+        val line = text.lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.isNotBlank() && !it.startsWith("#") }
+            ?: return null
+        return resolve(line, playlistUrl)
+    }
+
+    private fun isLikelyMediaChunk(bytes: ByteArray, contentType: String?): Boolean {
+        val ct = contentType?.lowercase().orEmpty()
+        if (ct.contains("image/") || ct.contains("text/html")) return false
+
+        if (bytes.size >= 8) {
+            // PNG signature
+            if (bytes[0] == 0x89.toByte() &&
+                bytes[1] == 0x50.toByte() &&
+                bytes[2] == 0x4E.toByte() &&
+                bytes[3] == 0x47.toByte()
+            ) return false
+
+            // fMP4 signature (....ftyp)
+            if (bytes[4] == 0x66.toByte() &&
+                bytes[5] == 0x74.toByte() &&
+                bytes[6] == 0x79.toByte() &&
+                bytes[7] == 0x70.toByte()
+            ) return true
+        }
+
+        // MPEG-TS sync byte at start or at 188-byte boundary.
+        if (bytes.isNotEmpty() && bytes[0] == 0x47.toByte()) return true
+        if (bytes.size > 188 && bytes[188] == 0x47.toByte()) return true
+
+        return ct.contains("video") || ct.contains("application/octet-stream")
+    }
+
+    private suspend fun isPlayableVariant(
+        variantUrl: String,
+        headers: Map<String, String>,
+        referer: String
+    ): Boolean {
+        val playlistText = runCatching {
+            app.get(variantUrl, headers = headers, referer = referer).text
+        }.getOrNull() ?: return false
+        if (!playlistText.contains("#EXTM3U", ignoreCase = true)) return false
+
+        val segmentUrl = parseFirstMediaEntry(variantUrl, playlistText) ?: return false
+        val segResp = runCatching {
+            app.get(segmentUrl, headers = headers, referer = referer)
+        }.getOrNull() ?: return false
+
+        val contentType = segResp.headers["Content-Type"] ?: segResp.headers["content-type"]
+        val body = runCatching { segResp.body.bytes() }.getOrNull() ?: return false
+        return isLikelyMediaChunk(body, contentType)
+    }
+
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val entryRef = referer ?: "$mainUrl/"
         val response = runCatching {
@@ -739,6 +795,7 @@ open class EmturbovidExtractor : ExtractorApi() {
 
         val variants = parseMasterVariants(masterUrl, masterText).distinctBy { it.first }
         if (variants.isEmpty()) {
+            if (!isPlayableVariant(masterUrl, playlistHeaders, pageUrl)) return null
             return listOf(
                 newExtractorLink(
                     source = name,
@@ -753,7 +810,12 @@ open class EmturbovidExtractor : ExtractorApi() {
             )
         }
 
-        return variants.map { (variantUrl, quality) ->
+        val playable = variants.filter { (variantUrl, _) ->
+            isPlayableVariant(variantUrl, playlistHeaders, pageUrl)
+        }
+        if (playable.isEmpty()) return null
+
+        return playable.map { (variantUrl, quality) ->
             newExtractorLink(
                 source = name,
                 name = if (quality == Qualities.Unknown.value) name else "$name ${quality}p",
@@ -763,6 +825,210 @@ open class EmturbovidExtractor : ExtractorApi() {
                 this.referer = pageUrl
                 this.headers = playlistHeaders
                 this.quality = quality
+            }
+        }
+    }
+}
+
+class PlayhydraxExtractor : ExtractorApi() {
+    override val name = "Hydrax"
+    override val mainUrl = "https://playhydrax.com"
+    override val requiresReferer = true
+
+    private fun md5Hex(input: String): String {
+        val bytes = MessageDigest.getInstance("MD5").digest(input.toByteArray(StandardCharsets.UTF_8))
+        val chars = "0123456789abcdef"
+        val out = StringBuilder(bytes.size * 2)
+        bytes.forEach { b ->
+            val v = b.toInt() and 0xff
+            out.append(chars[v ushr 4])
+            out.append(chars[v and 0x0f])
+        }
+        return out.toString()
+    }
+
+    private fun normalizeUrl(raw: String): String {
+        val fixed = when {
+            raw.startsWith("http://", true) || raw.startsWith("https://", true) -> raw
+            raw.startsWith("//") -> "https:$raw"
+            else -> "$mainUrl/${raw.trimStart('/')}"
+        }
+        val vId = Regex("""/(?:v|f|d|file|download)/([A-Za-z0-9]+)""", RegexOption.IGNORE_CASE)
+            .find(fixed)?.groupValues?.getOrNull(1)
+        return if (!vId.isNullOrBlank()) "$mainUrl/?v=$vId" else fixed
+    }
+
+    private fun isLikelyPlayable(url: String): Boolean {
+        val u = url.lowercase()
+        return u.contains("m3u8") || Regex("""\.(mp4|mkv|webm)(\?|$)""", RegexOption.IGNORE_CASE).containsMatchIn(url)
+    }
+
+    private fun parseQuality(label: String?, resId: Int): Int {
+        val fromLabel = Regex("""(\d{3,4})p""", RegexOption.IGNORE_CASE)
+            .find(label.orEmpty())
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
+        if (fromLabel != null) return fromLabel
+        return when (resId) {
+            1 -> 240
+            2 -> 360
+            3 -> 480
+            4 -> 720
+            5 -> 1080
+            6 -> 1440
+            7 -> 2160
+            else -> Qualities.Unknown.value
+        }
+    }
+
+    private fun extractCandidate(source: JSONObject): String? {
+        val direct = listOf("file", "src", "link", "playlist")
+            .firstNotNullOfOrNull { key ->
+                source.optString(key).trim().takeIf { it.isNotBlank() }
+            }
+        if (!direct.isNullOrBlank()) return direct
+
+        val hostUrl = source.optString("url").trim()
+        val path = source.optString("path").trim()
+        if (hostUrl.isNotBlank() && path.isNotBlank()) {
+            return "${hostUrl.trimEnd('/')}/${path.trimStart('/')}"
+        }
+        return null
+    }
+
+    private fun decryptMedia(datas: JSONObject): JSONObject? {
+        val slug = datas.optString("slug").trim()
+        val userId = datas.opt("user_id")?.toString()?.trim().orEmpty()
+        val md5Id = datas.opt("md5_id")?.toString()?.trim().orEmpty()
+        val encryptedMedia = datas.optString("media")
+        if (slug.isBlank() || userId.isBlank() || md5Id.isBlank() || encryptedMedia.isBlank()) return null
+
+        val keySeed = "$userId:$slug:$md5Id"
+        val key = md5Hex(keySeed).toByteArray(StandardCharsets.UTF_8)
+        if (key.size < 16) return null
+        val iv = key.copyOfRange(0, 16)
+
+        val plain = runCatching {
+            val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
+            val encrypted = encryptedMedia.toByteArray(Charsets.ISO_8859_1)
+            String(cipher.doFinal(encrypted), StandardCharsets.UTF_8)
+        }.getOrNull() ?: return null
+
+        return runCatching { JSONObject(plain) }.getOrNull()
+    }
+
+    private suspend fun emitSection(
+        sectionName: String,
+        section: JSONObject?,
+        pageUrl: String,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        if (section == null) return false
+        val sources = section.optJSONArray("sources") ?: return false
+        var emitted = false
+
+        for (i in 0 until sources.length()) {
+            val item = sources.optJSONObject(i) ?: continue
+            if (!item.optBoolean("status", true)) continue
+
+            val candidate = extractCandidate(item) ?: continue
+            val fixed = when {
+                candidate.startsWith("http://", true) || candidate.startsWith("https://", true) -> candidate
+                candidate.startsWith("//") -> "https:$candidate"
+                else -> continue
+            }
+            if (!isLikelyPlayable(fixed)) continue
+
+            val quality = parseQuality(item.optString("label"), item.optInt("res_id", -1))
+            val linkName = if (quality == Qualities.Unknown.value) name else "$name ${quality}p"
+            val headers = mapOf(
+                "Origin" to mainUrl,
+                "Referer" to pageUrl
+            )
+
+            if (fixed.contains("m3u8", true)) {
+                callback.invoke(
+                    newExtractorLink(
+                        source = "$name-$sectionName",
+                        name = linkName,
+                        url = fixed,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = pageUrl
+                        this.headers = headers
+                        this.quality = quality
+                    }
+                )
+            } else {
+                callback.invoke(
+                    newExtractorLink(
+                        source = "$name-$sectionName",
+                        name = linkName,
+                        url = fixed
+                    ) {
+                        this.referer = pageUrl
+                        this.headers = headers
+                        this.quality = quality
+                    }
+                )
+            }
+            emitted = true
+        }
+        return emitted
+    }
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val pageUrl = normalizeUrl(url)
+        val resp = runCatching { app.get(pageUrl, referer = referer ?: "$mainUrl/") }.getOrNull() ?: return
+        val html = resp.text
+        val datasB64 = Regex("""\bconst\s+datas\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+            .find(html)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.trim()
+            ?: return
+
+        val datas = runCatching {
+            val jsonText = String(java.util.Base64.getDecoder().decode(datasB64), Charsets.ISO_8859_1)
+            JSONObject(jsonText)
+        }.getOrNull() ?: return
+
+        val media = decryptMedia(datas) ?: return
+        var emitted = false
+        emitted = emitSection("HLS", media.optJSONObject("hls"), pageUrl, callback) || emitted
+        emitted = emitSection("MP4", media.optJSONObject("mp4"), pageUrl, callback) || emitted
+
+        if (!emitted) {
+            // Fallback in case direct m3u8 appears in decrypted blob in future variants.
+            val m3u8Links = Regex("""https?://[^\s"'<>]+m3u8[^\s"'<>]*""", RegexOption.IGNORE_CASE)
+                .findAll(media.toString())
+                .map { it.value }
+                .distinct()
+                .toList()
+
+            for (m3u8 in m3u8Links) {
+                callback.invoke(
+                    newExtractorLink(
+                        source = name,
+                        name = name,
+                        url = m3u8,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = pageUrl
+                        this.headers = mapOf(
+                            "Origin" to mainUrl,
+                            "Referer" to pageUrl
+                        )
+                        this.quality = Qualities.Unknown.value
+                    }
+                )
             }
         }
     }
