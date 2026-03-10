@@ -33,11 +33,16 @@ class MixDropBz : ExtractorApi() {
         )
 
         val scriptChunks = linkedSetOf<String>()
-        scriptChunks.add(response.text)
         response.document.select("script").forEach { script ->
             val data = script.data().trim()
             if (data.isBlank()) return@forEach
-            scriptChunks.add(data)
+            if (data.contains("MDCore", ignoreCase = true) ||
+                data.contains("wurl", ignoreCase = true) ||
+                data.contains("furl", ignoreCase = true) ||
+                data.contains("eval(function(p,a,c,k,e,d)")
+            ) {
+                scriptChunks.add(data)
+            }
             if (data.contains("eval(function(p,a,c,k,e,d)")) {
                 runCatching { getAndUnpack(data) }
                     .getOrNull()
@@ -60,11 +65,18 @@ class MixDropBz : ExtractorApi() {
                     ?.takeIf { it.isNotBlank() && it != " " }
             }
         }?.let { raw ->
+            val normalized = raw
+                .replace("\\/", "/")
+                .replace("&amp;", "&")
+                .replace("\\u0026", "&")
+                .trim()
             when {
-                raw.startsWith("http://", true) || raw.startsWith("https://", true) -> raw
-                raw.startsWith("//") -> "https:$raw"
+                normalized.startsWith("http://", true) || normalized.startsWith("https://", true) -> normalized
+                normalized.startsWith("//") -> "https:$normalized"
                 else -> null
             }
+        }?.takeIf {
+            it.contains(".mp4", ignoreCase = true) || it.contains(".m3u8", ignoreCase = true)
         } ?: return
 
         callback.invoke(
