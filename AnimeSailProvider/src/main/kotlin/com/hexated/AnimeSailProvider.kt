@@ -293,7 +293,7 @@ class AnimeSailProvider : MainAPI() {
                         url = link.url,
                         type = link.type
                     ) {
-                        this.referer = link.referer ?: referer ?: mainUrl
+                        this.referer = link.referer.takeIf { it.isNotBlank() } ?: referer ?: mainUrl
                         this.quality =
                             if (link.type == ExtractorLinkType.M3U8) link.quality else quality
                                 ?: Qualities.Unknown.value
