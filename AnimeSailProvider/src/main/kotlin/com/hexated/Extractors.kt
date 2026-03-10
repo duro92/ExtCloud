@@ -156,7 +156,17 @@ class Mp4UploadFix : ExtractorApi() {
         val id = idMatch.find(url)?.groupValues?.getOrNull(1)
         val realUrl = id?.let { "$mainUrl/embed-$it.html" } ?: url
         val embedReferer = realUrl
-        val watchReferer = id?.let { "$mainUrl/$it" } ?: "$mainUrl/"
+        val watchReferer = "$mainUrl/"
+
+        fun normalizeRedirect(location: String?): String? {
+            if (location.isNullOrBlank()) return null
+            return when {
+                location.startsWith("http://", true) || location.startsWith("https://", true) -> location
+                location.startsWith("//") -> "https:$location"
+                location.startsWith("/") -> "$mainUrl$location"
+                else -> null
+            }
+        }
 
         suspend fun isPlayable(candidateUrl: String, refererHeader: String): Boolean {
             val res = runCatching {
@@ -180,12 +190,29 @@ class Mp4UploadFix : ExtractorApi() {
         // Prefer download2 endpoint on 443 (more compatible than :183 direct stream URLs).
         if (!id.isNullOrBlank()) {
             val download2Url = "$mainUrl/dl?op=download2&id=$id"
-            if (isPlayable(download2Url, watchReferer)) {
+            val redirect = runCatching {
+                app.get(
+                    download2Url,
+                    referer = watchReferer,
+                    allowRedirects = false,
+                    headers = mapOf(
+                        "User-Agent" to USER_AGENT,
+                        "Referer" to watchReferer,
+                        "Origin" to mainUrl
+                    )
+                )
+            }.getOrNull()
+
+            val finalUrl = normalizeRedirect(
+                redirect?.headers?.get("Location") ?: redirect?.headers?.get("location")
+            )
+
+            if (!finalUrl.isNullOrBlank() && isPlayable(finalUrl, watchReferer)) {
                 return listOf(
                     newExtractorLink(
                         source = name,
                         name = name,
-                        url = download2Url,
+                        url = finalUrl,
                         type = INFER_TYPE
                     ) {
                         this.referer = watchReferer
@@ -245,11 +272,11 @@ class Mp4UploadFix : ExtractorApi() {
                 url = fixedStream,
                 type = INFER_TYPE
             ) {
-                this.referer = embedReferer
+                this.referer = watchReferer
                 this.quality = quality
                 this.headers = mapOf(
                     "User-Agent" to USER_AGENT,
-                    "Referer" to embedReferer,
+                    "Referer" to watchReferer,
                     "Origin" to mainUrl
                 )
             }

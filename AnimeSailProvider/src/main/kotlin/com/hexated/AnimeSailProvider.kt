@@ -335,9 +335,31 @@ class AnimeSailProvider : MainAPI() {
 
         val downloadUrl = "https://www.mp4upload.com/dl?op=download2&id=$id"
         val watchReferer = "https://www.mp4upload.com/"
-        val probe = runCatching {
+        val redirect = runCatching {
             app.get(
                 downloadUrl,
+                referer = watchReferer,
+                allowRedirects = false,
+                headers = mapOf(
+                    "User-Agent" to USER_AGENT,
+                    "Referer" to watchReferer,
+                    "Origin" to "https://www.mp4upload.com"
+                )
+            )
+        }.getOrNull() ?: return false
+
+        val location = redirect.headers["Location"] ?: redirect.headers["location"]
+        val finalUrl = when {
+            location.isNullOrBlank() -> return false
+            location.startsWith("http://", true) || location.startsWith("https://", true) -> location
+            location.startsWith("//") -> "https:$location"
+            location.startsWith("/") -> "https://www.mp4upload.com$location"
+            else -> return false
+        }
+
+        val probe = runCatching {
+            app.get(
+                finalUrl,
                 referer = watchReferer,
                 headers = mapOf(
                     "User-Agent" to USER_AGENT,
@@ -355,7 +377,7 @@ class AnimeSailProvider : MainAPI() {
             newExtractorLink(
                 source = "Mp4Upload",
                 name = serverName,
-                url = downloadUrl,
+                url = finalUrl,
                 type = INFER_TYPE
             ) {
                 this.referer = watchReferer
