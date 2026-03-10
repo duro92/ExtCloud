@@ -140,6 +140,14 @@ class Mp4UploadFix : ExtractorApi() {
     private val srcRegex = Regex("""player\.src\(\s*\{[\w\W]*?src:\s*"(.*?)"""", RegexOption.IGNORE_CASE)
     private val srcRegex2 = Regex("""player\.src\(\s*"(.*?)"""", RegexOption.IGNORE_CASE)
 
+    private fun looksLikeMp4(bytes: ByteArray): Boolean {
+        return bytes.size >= 8 &&
+            bytes[4] == 0x66.toByte() &&
+            bytes[5] == 0x74.toByte() &&
+            bytes[6] == 0x79.toByte() &&
+            bytes[7] == 0x70.toByte()
+    }
+
     override fun getExtractorUrl(id: String): String {
         return "$mainUrl/embed-$id.html"
     }
@@ -148,6 +156,49 @@ class Mp4UploadFix : ExtractorApi() {
         val id = idMatch.find(url)?.groupValues?.getOrNull(1)
         val realUrl = id?.let { "$mainUrl/embed-$it.html" } ?: url
         val embedReferer = realUrl
+        val watchReferer = id?.let { "$mainUrl/$it" } ?: "$mainUrl/"
+
+        suspend fun isPlayable(candidateUrl: String, refererHeader: String): Boolean {
+            val res = runCatching {
+                app.get(
+                    candidateUrl,
+                    referer = refererHeader,
+                    headers = mapOf(
+                        "User-Agent" to USER_AGENT,
+                        "Referer" to refererHeader,
+                        "Origin" to mainUrl,
+                        "Range" to "bytes=0-4095"
+                    )
+                )
+            }.getOrNull() ?: return false
+
+            val ct = (res.headers["Content-Type"] ?: res.headers["content-type"]).orEmpty().lowercase()
+            val bytes = runCatching { res.body.bytes().take(4096).toByteArray() }.getOrNull() ?: return false
+            return ct.contains("video") || ct.contains("octet-stream") && looksLikeMp4(bytes)
+        }
+
+        // Prefer download2 endpoint on 443 (more compatible than :183 direct stream URLs).
+        if (!id.isNullOrBlank()) {
+            val download2Url = "$mainUrl/dl?op=download2&id=$id"
+            if (isPlayable(download2Url, watchReferer)) {
+                return listOf(
+                    newExtractorLink(
+                        source = name,
+                        name = name,
+                        url = download2Url,
+                        type = INFER_TYPE
+                    ) {
+                        this.referer = watchReferer
+                        this.quality = Qualities.Unknown.value
+                        this.headers = mapOf(
+                            "User-Agent" to USER_AGENT,
+                            "Referer" to watchReferer,
+                            "Origin" to mainUrl
+                        )
+                    }
+                )
+            }
+        }
 
         val response = app.get(
             realUrl,
