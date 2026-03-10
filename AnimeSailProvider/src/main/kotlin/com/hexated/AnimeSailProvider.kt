@@ -181,6 +181,18 @@ class AnimeSailProvider : MainAPI() {
 
                 when {
                     iframe.endsWith(".mp4", ignoreCase = true) || iframe.endsWith(".m3u8", ignoreCase = true) -> {
+                        val isMp4UploadDirect = iframe.contains("mp4upload.com", ignoreCase = true)
+                        val directReferer = if (isMp4UploadDirect) "https://www.mp4upload.com/" else mainUrl
+                        val directHeaders = if (isMp4UploadDirect) {
+                            mapOf(
+                                "User-Agent" to USER_AGENT,
+                                "Referer" to directReferer,
+                                "Origin" to "https://www.mp4upload.com"
+                            )
+                        } else {
+                            emptyMap()
+                        }
+
                         callback.invoke(
                             newExtractorLink(
                                 source = serverName,
@@ -188,8 +200,9 @@ class AnimeSailProvider : MainAPI() {
                                 url = iframe,
                                 type = if (iframe.endsWith(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                             ) {
-                                referer = mainUrl
+                                referer = directReferer
                                 this.quality = quality
+                                this.headers = directHeaders
                             }
                         )
                     }
@@ -281,6 +294,8 @@ class AnimeSailProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        if (tryLoadMp4UploadDirect(url, serverName, quality, callback)) return
+
         loadExtractor(url, referer, subtitleCallback) { link ->
             val finalName =
                 if (serverName.equals(link.name, ignoreCase = true)) link.name else "$serverName - ${link.name}"
@@ -303,6 +318,56 @@ class AnimeSailProvider : MainAPI() {
                 )
             }
         }
+    }
+
+    private suspend fun tryLoadMp4UploadDirect(
+        url: String,
+        serverName: String,
+        quality: Int?,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val id = Regex("""mp4upload\.com/(?:embed-)?([A-Za-z0-9]+)(?:\.html)?""", RegexOption.IGNORE_CASE)
+            .find(url)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.takeIf { it.isNotBlank() }
+            ?: return false
+
+        val downloadUrl = "https://www.mp4upload.com/dl?op=download2&id=$id"
+        val watchReferer = "https://www.mp4upload.com/"
+        val probe = runCatching {
+            app.get(
+                downloadUrl,
+                referer = watchReferer,
+                headers = mapOf(
+                    "User-Agent" to USER_AGENT,
+                    "Referer" to watchReferer,
+                    "Origin" to "https://www.mp4upload.com",
+                    "Range" to "bytes=0-4095"
+                )
+            )
+        }.getOrNull() ?: return false
+
+        val contentType = (probe.headers["Content-Type"] ?: probe.headers["content-type"]).orEmpty().lowercase()
+        if (!(contentType.contains("octet-stream") || contentType.contains("video"))) return false
+
+        callback.invoke(
+            newExtractorLink(
+                source = "Mp4Upload",
+                name = serverName,
+                url = downloadUrl,
+                type = INFER_TYPE
+            ) {
+                this.referer = watchReferer
+                this.quality = quality ?: Qualities.Unknown.value
+                this.headers = mapOf(
+                    "User-Agent" to USER_AGENT,
+                    "Referer" to watchReferer,
+                    "Origin" to "https://www.mp4upload.com"
+                )
+            }
+        )
+        return true
     }
 
     private fun getIndexQuality(str: String): Int {
