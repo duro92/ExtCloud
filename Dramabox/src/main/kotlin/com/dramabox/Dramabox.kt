@@ -9,6 +9,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import java.net.URLDecoder
 import java.net.URLEncoder
 
 class Dramabox : MainAPI() {
@@ -55,8 +56,19 @@ class Dramabox : MainAPI() {
         val dramaId = extractDramaId(url)
         if (dramaId.isBlank()) throw ErrorLoadingException("ID tidak ditemukan")
 
-        val detail = fetchDramaDetail(dramaId)
-        val episodeCount = detail?.data?.episodeCount ?: inferEpisodeCount(dramaId)
+        val localTitle = getQueryParam(url, "title")
+        val localPoster = getQueryParam(url, "poster")
+        val localIntro = getQueryParam(url, "intro")
+        val localTags = getQueryParam(url, "tags")
+            ?.split("|")
+            ?.map { it.trim() }
+            ?.filter { it.isNotBlank() }
+            ?.takeIf { it.isNotEmpty() }
+        val localEpisodeCount = getQueryParam(url, "ep")?.toIntOrNull()
+
+        val needDetail = localEpisodeCount == null || localTitle.isNullOrBlank() || localPoster.isNullOrBlank() || localIntro.isNullOrBlank()
+        val detail = if (needDetail) fetchDramaDetail(dramaId) else null
+        val episodeCount = localEpisodeCount ?: detail?.data?.episodeCount ?: inferEpisodeCount(dramaId)
         if (episodeCount <= 0) throw ErrorLoadingException("Episode tidak ditemukan")
 
         val episodes = (1..episodeCount).map { episodeNo ->
@@ -71,13 +83,15 @@ class Dramabox : MainAPI() {
             }
         }
 
-        val title = detail?.data?.title?.takeIf { it.isNotBlank() } ?: "DramaBox"
+        val title = localTitle?.takeIf { it.isNotBlank() }
+            ?: detail?.data?.title?.takeIf { it.isNotBlank() }
+            ?: "DramaBox"
         val safeUrl = buildDramaUrl(dramaId)
 
         return newTvSeriesLoadResponse(title, safeUrl, TvType.AsianDrama, episodes) {
-            posterUrl = detail?.data?.coverImage
-            plot = detail?.data?.introduction
-            tags = detail?.data?.tags
+            posterUrl = localPoster?.takeIf { it.isNotBlank() } ?: detail?.data?.coverImage
+            plot = localIntro?.takeIf { it.isNotBlank() } ?: detail?.data?.introduction
+            tags = localTags ?: detail?.data?.tags
         }
     }
 
@@ -163,13 +177,38 @@ class Dramabox : MainAPI() {
         val title = title?.trim().orEmpty()
         if (id.isBlank() || title.isBlank()) return null
 
-        return newTvSeriesSearchResponse(title, buildDramaUrl(id), TvType.AsianDrama) {
+        return newTvSeriesSearchResponse(
+            title,
+            buildDramaUrl(
+                dramaId = id,
+                title = title,
+                poster = coverImage,
+                intro = introduction,
+                tags = tags,
+                episodeCount = episodeCount
+            ),
+            TvType.AsianDrama
+        ) {
             posterUrl = coverImage
         }
     }
 
-    private fun buildDramaUrl(dramaId: String): String {
-        return "dramabox://drama/$dramaId"
+    private fun buildDramaUrl(
+        dramaId: String,
+        title: String? = null,
+        poster: String? = null,
+        intro: String? = null,
+        tags: List<String>? = null,
+        episodeCount: Int? = null,
+    ): String {
+        val params = mutableListOf<String>()
+        title?.takeIf { it.isNotBlank() }?.let { params.add("title=${encodeQuery(it)}") }
+        poster?.takeIf { it.isNotBlank() }?.let { params.add("poster=${encodeQuery(it)}") }
+        intro?.takeIf { it.isNotBlank() }?.let { params.add("intro=${encodeQuery(it)}") }
+        tags?.takeIf { it.isNotEmpty() }?.let { params.add("tags=${encodeQuery(it.joinToString("|"))}") }
+        episodeCount?.takeIf { it > 0 }?.let { params.add("ep=$it") }
+        val suffix = if (params.isEmpty()) "" else "?${params.joinToString("&")}"
+        return "dramabox://drama/$dramaId$suffix"
     }
 
     private fun extractDramaId(url: String): String {
@@ -182,6 +221,17 @@ class Dramabox : MainAPI() {
 
     private fun encodeQuery(value: String): String {
         return URLEncoder.encode(value, "UTF-8")
+    }
+
+    private fun getQueryParam(url: String, key: String): String? {
+        val query = url.substringAfter("?", "")
+        if (query.isBlank()) return null
+        val value = query.split("&")
+            .firstOrNull { it.startsWith("$key=") }
+            ?.substringAfter("=")
+            ?.takeIf { it.isNotBlank() }
+            ?: return null
+        return runCatching { URLDecoder.decode(value, "UTF-8") }.getOrNull() ?: value
     }
 
     private fun LoadData.toJsonData(): String = this.toJson()
