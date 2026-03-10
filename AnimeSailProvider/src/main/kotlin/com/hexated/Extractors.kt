@@ -130,3 +130,78 @@ class MixDropBz : ExtractorApi() {
         )
     }
 }
+
+class Mp4UploadFix : ExtractorApi() {
+    override var name = "Mp4Upload"
+    override var mainUrl = "https://www.mp4upload.com"
+    override val requiresReferer = true
+
+    private val idMatch = Regex("""mp4upload\.com/(?:embed-|)([A-Za-z0-9]+)""", RegexOption.IGNORE_CASE)
+    private val srcRegex = Regex("""player\.src\(\s*\{[\w\W]*?src:\s*"(.*?)"""", RegexOption.IGNORE_CASE)
+    private val srcRegex2 = Regex("""player\.src\(\s*"(.*?)"""", RegexOption.IGNORE_CASE)
+
+    override fun getExtractorUrl(id: String): String {
+        return "$mainUrl/embed-$id.html"
+    }
+
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
+        val id = idMatch.find(url)?.groupValues?.getOrNull(1)
+        val realUrl = id?.let { "$mainUrl/embed-$it.html" } ?: url
+        val embedReferer = realUrl
+
+        val response = app.get(
+            realUrl,
+            referer = referer ?: "$mainUrl/",
+            headers = mapOf("User-Agent" to USER_AGENT)
+        )
+
+        val scriptBlobs = linkedSetOf<String>()
+        scriptBlobs.add(response.text)
+        runCatching { getAndUnpack(response.text) }.getOrNull()?.let { scriptBlobs.add(it) }
+        response.document.select("script").forEach { script ->
+            val data = script.data().trim()
+            if (data.isNotBlank()) {
+                scriptBlobs.add(data)
+                if (data.contains("eval(function(p,a,c,k,e,d)")) {
+                    runCatching { getAndUnpack(data) }.getOrNull()?.let { scriptBlobs.add(it) }
+                }
+            }
+        }
+
+        val streamUrl = scriptBlobs.firstNotNullOfOrNull { blob ->
+            srcRegex.find(blob)?.groupValues?.getOrNull(1)?.trim()
+                ?: srcRegex2.find(blob)?.groupValues?.getOrNull(1)?.trim()
+        }?.takeIf { it.isNotBlank() } ?: return null
+
+        val quality = scriptBlobs.firstNotNullOfOrNull { blob ->
+            Regex("""height\s*[:=]\s*["']?(\d{3,4})""", RegexOption.IGNORE_CASE)
+                .find(blob)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toIntOrNull()
+        } ?: Qualities.Unknown.value
+
+        val fixedStream = when {
+            streamUrl.startsWith("http://", true) || streamUrl.startsWith("https://", true) -> streamUrl
+            streamUrl.startsWith("//") -> "https:$streamUrl"
+            else -> return null
+        }
+
+        return listOf(
+            newExtractorLink(
+                source = name,
+                name = name,
+                url = fixedStream,
+                type = INFER_TYPE
+            ) {
+                this.referer = embedReferer
+                this.quality = quality
+                this.headers = mapOf(
+                    "User-Agent" to USER_AGENT,
+                    "Referer" to embedReferer,
+                    "Origin" to mainUrl
+                )
+            }
+        )
+    }
+}

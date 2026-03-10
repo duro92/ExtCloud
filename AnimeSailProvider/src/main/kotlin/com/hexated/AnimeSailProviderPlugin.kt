@@ -11,5 +11,6 @@ class AnimeSailProviderPlugin: Plugin() {
         // All providers should be added in this manner. Please don't edit the providers list directly.
         registerMainAPI(AnimeSailProvider())
         registerExtractorAPI(MixDropBz())
+        registerExtractorAPI(Mp4UploadFix())
     }
 }
