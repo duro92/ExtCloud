@@ -3,6 +3,7 @@ package com.pusatfilm
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.base64Decode
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -12,11 +13,15 @@ import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.getAndUnpack
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.nicehttp.RequestBodyTypes
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 
 private data class CryptoJsAesJson(
@@ -605,6 +610,126 @@ open class Kotakajaib : ExtractorApi() {
         return null
     }
 
+    private fun isFilepressHost(host: String?): Boolean {
+        val h = host?.lowercase().orEmpty()
+        return h.endsWith("filepress.wiki") || h.endsWith("filebee.xyz")
+    }
+
+    private fun normalizeFilepressValue(value: String, method: String): String? {
+        val raw = value.trim()
+        if (raw.isBlank()) return null
+        if (raw.startsWith("http://", true) || raw.startsWith("https://", true)) return raw
+        val looksLikeMongoId = Regex("""^[a-f0-9]{24}$""", RegexOption.IGNORE_CASE).matches(raw)
+        return when (method) {
+            "publicDownlaod", "publicUserDownlaod", "gpDirectDownlaod" ->
+                if (looksLikeMongoId) null else "https://drive.google.com/uc?id=$raw"
+            "privateDownlaod" ->
+                if (looksLikeMongoId) null else "https://drive.google.com/file/d/$raw/view"
+            else -> null
+        }
+    }
+
+    private suspend fun tryExtractFilepress(
+        pageUrl: String,
+        quality: Int?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val fileId = Regex("""/file/([A-Za-z0-9]+)""", RegexOption.IGNORE_CASE)
+            .find(pageUrl)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.takeIf { it.isNotBlank() }
+            ?: return false
+
+        val base = runCatching {
+            val u = java.net.URI(pageUrl)
+            "${u.scheme ?: "https"}://${u.host}"
+        }.getOrNull() ?: return false
+
+        val apiUrl = "$base/api/file/downlaod"
+        val methods = listOf(
+            "publicDownlaod",
+            "publicUserDownlaod",
+            "privateDownlaod",
+            "indexDownlaod",
+            "cloudDownlaod",
+            "gpDirectDownlaod",
+            "telegramDownload"
+        )
+
+        val visited = linkedSetOf<String>()
+        var emitted = false
+
+        suspend fun emitCandidate(candidateRaw: String?, method: String) {
+            val normalized = candidateRaw?.let { normalizeFilepressValue(it, method) } ?: return
+            if (!visited.add(normalized)) return
+
+            var linked = false
+            loadExtractor(normalized, pageUrl, subtitleCallback) { link ->
+                linked = true
+                emitted = true
+                callback(link)
+            }
+
+            if (!linked && Regex("""\.(m3u8|mp4|mkv|webm)(\?|$)""", RegexOption.IGNORE_CASE).containsMatchIn(normalized)) {
+                emitted = true
+                callback.invoke(
+                    newExtractorLink(
+                        source = "Filepress",
+                        name = if (quality != null) "Filepress ${quality}p" else "Filepress",
+                        url = normalized
+                    ) {
+                        this.referer = pageUrl
+                        this.quality = quality ?: Qualities.Unknown.value
+                    }
+                )
+            }
+        }
+
+        for (method in methods) {
+            val body = mapOf(
+                "id" to fileId,
+                "method" to method,
+                "captchaValue" to ""
+            ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
+
+            val responseText = runCatching {
+                app.post(
+                    apiUrl,
+                    referer = pageUrl,
+                    headers = mapOf(
+                        "Origin" to base,
+                        "Referer" to pageUrl,
+                        "Accept" to "application/json, text/plain, */*",
+                        "X-Requested-With" to "XMLHttpRequest"
+                    ),
+                    requestBody = body
+                ).text
+            }.getOrNull() ?: continue
+
+            val payload = runCatching { JSONObject(responseText) }.getOrNull() ?: continue
+            if (!payload.optBoolean("status", false)) continue
+            val data = payload.opt("data") ?: continue
+
+            when (data) {
+                is String -> emitCandidate(data, method)
+                is JSONArray -> {
+                    for (i in 0 until data.length()) {
+                        emitCandidate(data.optString(i), method)
+                    }
+                }
+                is JSONObject -> {
+                    emitCandidate(data.optString("url"), method)
+                    emitCandidate(data.optString("link"), method)
+                    emitCandidate(data.optString("id"), method)
+                }
+            }
+        }
+
+        return emitted
+    }
+
     private suspend fun emitOrExtract(
         targetUrl: String,
         referer: String,
@@ -619,16 +744,22 @@ open class Kotakajaib : ExtractorApi() {
         }
 
         var handled = false
+        val host = runCatching { java.net.URI(fixed).host?.lowercase() }.getOrNull()
 
         // gdriveplayer.to is often served in a way that breaks the upstream AES-based extractor.
         // Handle the observed embed2.php -> hlsplaylist.php -> hlsnew2.php flow directly.
-        if (runCatching { java.net.URI(fixed).host?.lowercase() }.getOrNull() == "gdriveplayer.to") {
+        if (host == "gdriveplayer.to") {
             if (tryExtractGdriveplayer(fixed, referer, quality, callback)) return
+        }
+
+        // Filepress/Filebee frequently wraps final links via their own API.
+        if (isFilepressHost(host)) {
+            if (tryExtractFilepress(fixed, quality, subtitleCallback, callback)) return
         }
 
         // Pixeldrain pages are not always handled by loadExtractor in all builds.
         // If we can map /u/{id} -> /api/file/{id}, emit it directly.
-        if (runCatching { java.net.URI(fixed).host?.lowercase() }.getOrNull() == "pixeldrain.com") {
+        if (host == "pixeldrain.com") {
             val idFromPath = Regex("""/u/([A-Za-z0-9]+)""").find(fixed)?.groupValues?.getOrNull(1)
             val id = idFromPath ?: runCatching {
                 val doc = app.get(fixed, referer = referer).document
