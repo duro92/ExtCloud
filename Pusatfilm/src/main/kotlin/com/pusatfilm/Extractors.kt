@@ -539,37 +539,69 @@ open class Kotakajaib : ExtractorApi() {
 
     private suspend fun resolveRedirectPageIfDirect(url: String, referer: String): String? {
         // Only attempt for common intermediate links. If a page requires interaction, we bail out.
-        val host = runCatching { java.net.URI(url).host ?: "" }.getOrDefault("")
-        if (host.isBlank()) return null
-        val lowerHost = host.lowercase()
-        val mightBeIntermediate = lowerHost.contains("ouo.") || lowerHost.contains("ouo-") || lowerHost.contains("ouo")
-        if (!mightBeIntermediate) return null
+        fun isOuoHost(host: String?): Boolean {
+            val h = host?.lowercase().orEmpty()
+            return h.contains("ouo.io") || h.contains("ouo.press") || h.contains("ouo-")
+        }
+        fun resolveAgainst(base: String, target: String): String? = runCatching {
+            when {
+                target.startsWith("http://", true) || target.startsWith("https://", true) -> target
+                target.startsWith("//") -> "https:$target"
+                else -> java.net.URI(base).resolve(target).toString()
+            }
+        }.getOrNull()
 
-        val resp = runCatching { app.get(url, referer = referer, allowRedirects = false) }.getOrNull() ?: return null
-        val html = runCatching { resp.text }.getOrNull()?.trim().orEmpty()
-        if (html.isBlank()) return null
+        val firstHost = runCatching { java.net.URI(url).host }.getOrNull()
+        if (!isOuoHost(firstHost)) return null
 
-        // If it looks like an interaction page, don't proceed.
-        if (html.contains("I'M A HUMAN", ignoreCase = true) ||
-            html.contains("I am human", ignoreCase = true) ||
-            html.contains("captcha", ignoreCase = true) ||
-            html.contains("g-recaptcha", ignoreCase = true)
-        ) return null
+        var current = url
+        repeat(4) {
+            val resp = runCatching {
+                app.get(
+                    current,
+                    referer = referer,
+                    allowRedirects = false,
+                    headers = mapOf(
+                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+                        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+                    )
+                )
+            }.getOrNull() ?: return null
 
-        // meta refresh: <meta http-equiv="refresh" content="1;url=https://...">
-        Regex("""http-equiv\s*=\s*["']refresh["'][^>]*content\s*=\s*["'][^"']*url\s*=\s*([^"'>\s]+)""", RegexOption.IGNORE_CASE)
-            .find(html)
-            ?.groupValues
-            ?.getOrNull(1)
-            ?.let { return it }
+            val location = resp.headers["Location"] ?: resp.headers["location"]
+            if (!location.isNullOrBlank()) {
+                val next = resolveAgainst(current, location) ?: return null
+                val nextHost = runCatching { java.net.URI(next).host }.getOrNull()
+                if (!isOuoHost(nextHost)) return next
+                current = next
+                return@repeat
+            }
 
-        // plain link in body
-        Regex("""<a[^>]+href=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
-            .find(html)
-            ?.groupValues
-            ?.getOrNull(1)
-            ?.let { return it }
+            val html = runCatching { resp.text }.getOrNull()?.trim().orEmpty()
+            if (html.isBlank()) return null
 
+            // If it looks like an interaction/challenge page, don't proceed.
+            if (html.contains("I'M A HUMAN", ignoreCase = true) ||
+                html.contains("I am human", ignoreCase = true) ||
+                html.contains("captcha", ignoreCase = true) ||
+                html.contains("g-recaptcha", ignoreCase = true) ||
+                html.contains("cf-turnstile", ignoreCase = true)
+            ) return null
+
+            val nextCandidate = Regex(
+                """http-equiv\s*=\s*["']refresh["'][^>]*content\s*=\s*["'][^"']*url\s*=\s*([^"'>\s]+)""",
+                RegexOption.IGNORE_CASE
+            ).find(html)?.groupValues?.getOrNull(1)
+                ?: Regex("""location\.(?:href|replace)\(['"]([^'"]+)['"]\)""", RegexOption.IGNORE_CASE)
+                    .find(html)?.groupValues?.getOrNull(1)
+                ?: Regex("""<a[^>]+href=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+                    .find(html)?.groupValues?.getOrNull(1)
+
+            val next = nextCandidate?.let { resolveAgainst(current, it) } ?: return null
+            val nextHost = runCatching { java.net.URI(next).host }.getOrNull()
+            if (!isOuoHost(nextHost)) return next
+            current = next
+        }
         return null
     }
 
