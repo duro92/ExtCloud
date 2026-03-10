@@ -56,28 +56,61 @@ class MixDropBz : ExtractorApi() {
             Regex("""(?:MDCore\.)?furl\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE),
         )
 
-        val streamUrl = scriptChunks.firstNotNullOfOrNull { blob ->
-            streamRegexes.firstNotNullOfOrNull { regex ->
-                regex.find(blob)
-                    ?.groupValues
-                    ?.getOrNull(1)
-                    ?.trim()
-                    ?.takeIf { it.isNotBlank() && it != " " }
-            }
-        }?.let { raw ->
+        fun normalizeCandidate(raw: String): String? {
             val normalized = raw
                 .replace("\\/", "/")
                 .replace("&amp;", "&")
                 .replace("\\u0026", "&")
                 .trim()
-            when {
+            val absolute = when {
                 normalized.startsWith("http://", true) || normalized.startsWith("https://", true) -> normalized
                 normalized.startsWith("//") -> "https:$normalized"
-                else -> null
+                else -> return null
             }
-        }?.takeIf {
-            it.contains(".mp4", ignoreCase = true) || it.contains(".m3u8", ignoreCase = true)
-        } ?: return
+            return absolute.takeIf {
+                it.contains(".mp4", ignoreCase = true) || it.contains(".m3u8", ignoreCase = true)
+            }
+        }
+
+        suspend fun isPlayable(candidate: String): Boolean {
+            val res = runCatching {
+                app.get(
+                    candidate,
+                    referer = embedUrl,
+                    headers = mapOf(
+                        "User-Agent" to USER_AGENT,
+                        "Referer" to embedUrl,
+                        "Origin" to mainUrl,
+                        "Range" to "bytes=0-4095"
+                    )
+                )
+            }.getOrNull() ?: return false
+
+            val ct = (res.headers["Content-Type"] ?: res.headers["content-type"]).orEmpty().lowercase()
+            val bytes = runCatching { res.body.bytes().take(4096).toByteArray() }.getOrNull() ?: return false
+            val isMp4 = bytes.size >= 8 &&
+                bytes[4] == 0x66.toByte() &&
+                bytes[5] == 0x74.toByte() &&
+                bytes[6] == 0x79.toByte() &&
+                bytes[7] == 0x70.toByte()
+            val headText = runCatching { String(bytes, Charsets.UTF_8) }.getOrDefault("")
+            return ct.contains("video/mp4") || isMp4 || headText.contains("#EXTM3U")
+        }
+
+        val candidates = linkedSetOf<String>()
+        scriptChunks.forEach { blob ->
+            streamRegexes.forEach { regex ->
+                regex.findAll(blob).forEach { m ->
+                    m.groupValues.getOrNull(1)
+                        ?.trim()
+                        ?.takeIf { it.isNotBlank() && it != " " }
+                        ?.let(::normalizeCandidate)
+                        ?.let(candidates::add)
+                }
+            }
+        }
+        if (candidates.isEmpty()) return
+        val streamUrl = candidates.firstOrNull { isPlayable(it) } ?: return
 
         callback.invoke(
             newExtractorLink(
