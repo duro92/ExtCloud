@@ -1,6 +1,7 @@
 package com.hexated
 
 import android.annotation.SuppressLint
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.webkit.CookieManager
@@ -400,6 +401,36 @@ class AnimeSailProvider : MainAPI() {
 }
 
 class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") : Interceptor {
+    private fun clearCookie(cookieManager: CookieManager, domainUrl: String, name: String) {
+        cookieManager.setCookie(domainUrl, "$name=; Max-Age=0; path=/")
+    }
+
+    private fun mergeCookieHeaders(first: String?, second: String?): String {
+        return listOfNotNull(first, second)
+            .flatMap { it.split(";") }
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .joinToString("; ")
+    }
+
+    private fun isChallengePage(response: Response): Boolean {
+        if (response.code == 403 || response.code == 503) return true
+        if (!response.isSuccessful) return false
+
+        val contentType = response.header("Content-Type").orEmpty().lowercase()
+        if (!contentType.contains("text/html")) return false
+
+        val html = runCatching { response.peekBody(256_000).string().lowercase() }.getOrDefault("")
+        if (html.isBlank()) return false
+
+        return html.contains("cf-turnstile") ||
+            html.contains("challenge-platform") ||
+            html.contains("checking your browser") ||
+            html.contains("just a moment") ||
+            html.contains(targetCookie)
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun intercept(chain: Interceptor.Chain): Response {
         val originalRequest = chain.request()
@@ -420,7 +451,7 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
 
             initialResponse = chain.proceed(requestBuilder.build())
 
-            if (initialResponse.code == 403 || initialResponse.code == 503) {
+            if (isChallengePage(initialResponse)) {
                 needsRefresh = true
                 initialResponse.close()
             } else {
@@ -441,6 +472,11 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
                         val newWebView = WebView(context)
                         webView = newWebView
 
+                        cookieManager.setAcceptCookie(true)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                            cookieManager.setAcceptThirdPartyCookies(newWebView, true)
+                        }
+
                         newWebView.settings.apply {
                             javaScriptEnabled = true
                             domStorageEnabled = true
@@ -450,7 +486,10 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
 
                         newWebView.webViewClient = WebViewClient()
 
-                        cookieManager.setCookie(domainUrl, "$targetCookie=; Max-Age=0")
+                        clearCookie(cookieManager, domainUrl, targetCookie)
+                        clearCookie(cookieManager, domainUrl, "cf_clearance")
+                        clearCookie(cookieManager, domainUrl, "__cf_bm")
+                        clearCookie(cookieManager, domainUrl, "__cfseq")
                         cookieManager.flush()
 
                         newWebView.loadUrl(url)
@@ -460,12 +499,12 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
                 }
 
                 var attempts = 0
-                val maxAttempts = 15
+                val maxAttempts = 30
                 while (attempts < maxAttempts) {
                     Thread.sleep(1000)
                     val checkCookies = cookieManager.getCookie(domainUrl) ?: ""
 
-                    if (checkCookies.contains(targetCookie)) {
+                    if (checkCookies.contains(targetCookie) || checkCookies.contains("cf_clearance")) {
                         cookieManager.flush()
                         break
                     }
@@ -483,9 +522,10 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
             }
 
             currentCookies = cookieManager.getCookie(domainUrl) ?: ""
+            val mergedCookies = mergeCookieHeaders(originalRequest.header("Cookie"), currentCookies)
             val newRequestBuilder = originalRequest.newBuilder()
                 .header("User-Agent", userAgent)
-                .header("Cookie", currentCookies)
+                .header("Cookie", mergedCookies)
 
             return chain.proceed(newRequestBuilder.build())
         }

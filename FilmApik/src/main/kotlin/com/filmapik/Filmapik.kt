@@ -36,13 +36,27 @@ class Filmapik : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val a = selectFirst(
-            "div.data h3 a, div.thumbnail a[href], div.image div.thumbnail a[href], h3 a[href], h2 a[href], a[href]"
+        val titleAnchor = selectFirst(
+            "div.details div.title a[href], div.data h3 a[href], h3 a[href], h2 a[href], .title a[href]"
+        )
+        val a = titleAnchor ?: selectFirst(
+            "div.thumbnail a[href], div.image div.thumbnail a[href], a[href]"
         ) ?: return null
         val href = a.attr("href").trim().takeIf { it.isNotBlank() } ?: return null
-        val title = a.text().trim()
-            .ifBlank { selectFirst("img[alt]")?.attr("alt")?.trim().orEmpty() }
-            .ifBlank { return null }
+
+        val rawTitle = listOf(
+            titleAnchor?.text()?.trim(),
+            selectFirst("div.details div.title")?.text()?.trim(),
+            selectFirst("img[alt]")?.attr("alt")?.trim(),
+            a.text().trim()
+        ).firstOrNull { !it.isNullOrBlank() && !it.equals("movies", true) && !it.equals("movie", true) && !it.equals("tv-shows", true) && !it.equals("tvshows", true) }
+            ?: return null
+
+        val title = rawTitle
+            .replace(Regex("(?i)^nonton\\s+film\\s+"), "")
+            .replace(Regex("(?i)^nonton\\s+"), "")
+            .replace(Regex("(?i)subtitle\\s+indonesia\\s*$"), "")
+            .trim()
 
         val poster = fixUrlNull(
             selectFirst("img[src], img[data-src], img[data-lazy-src]")?.let { img ->
@@ -65,8 +79,10 @@ class Filmapik : MainAPI() {
             ?.trim()
             ?.takeIf { it.isNotBlank() }
 
+        val postLabel = selectFirst("span.post")?.text()?.trim().orEmpty()
         val type = when {
             selectFirst("span.tvshows, span.tv, .tvshows, .tv-show") != null -> TvType.TvSeries
+            postLabel.contains("tv", true) || postLabel.contains("series", true) -> TvType.TvSeries
             href.contains("/tvshows/", true) || href.contains("/series/", true) -> TvType.TvSeries
             else -> TvType.Movie
         }

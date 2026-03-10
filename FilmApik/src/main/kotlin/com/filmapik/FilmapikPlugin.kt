@@ -10,5 +10,6 @@ class FilmapikPlugin : Plugin() {
     override fun load(context: Context) {
         Filmapik.context = context
         registerMainAPI(Filmapik())
+        registerExtractorAPI(BuzzServer())
     }
 }
