@@ -168,18 +168,19 @@ class Pusatfilm : MainAPI() {
         suspend fun parseCandidate(rawUrl: String?) {
             val cleaned = rawUrl?.trim()?.takeIf { it.isNotBlank() } ?: return
             val fixed = runCatching { httpsify(fixUrl(cleaned)) }.getOrElse { return }
-            if (!visited.add(fixed)) return
+            val resolved = resolveOuoIfDirect(fixed, data) ?: fixed
+            if (!visited.add(resolved)) return
 
             // Use the current page as referer; many embed hosts expect this.
             val pageReferer = data
-            loadExtractor(fixed, pageReferer, subtitleCallback) { link ->
+            loadExtractor(resolved, pageReferer, subtitleCallback) { link ->
                 found = true
                 callback(link)
             }
 
-            if (fixed.contains("kotakajaib.me/file/")) {
-                val base = runCatching { getBaseUrl(fixed) }.getOrDefault("https://kotakajaib.me")
-                val fileId = fixed.substringAfter("/file/").substringBefore("?").substringBefore("/")
+            if (resolved.contains("kotakajaib.me/file/")) {
+                val base = runCatching { getBaseUrl(resolved) }.getOrDefault("https://kotakajaib.me")
+                val fileId = resolved.substringAfter("/file/").substringBefore("?").substringBefore("/")
                 if (fileId.isNotBlank()) {
                     val apiUrl = "$base/api/file/$fileId/download"
                     if (visited.add(apiUrl)) {
@@ -209,6 +210,72 @@ class Pusatfilm : MainAPI() {
 
         (iframeLinks + downloadLinks).forEach { parseCandidate(it) }
         return found
+    }
+
+    private fun isOuoHost(host: String?): Boolean {
+        val h = host?.lowercase().orEmpty()
+        return h.contains("ouo.io") || h.contains("ouo.press") || h.startsWith("www.ouo.")
+    }
+
+    private fun resolveRelativeOrNull(baseUrl: String, target: String): String? = runCatching {
+        when {
+            target.startsWith("http://", true) || target.startsWith("https://", true) -> target
+            target.startsWith("//") -> "https:$target"
+            else -> URI(baseUrl).resolve(target).toString()
+        }
+    }.getOrNull()
+
+    private suspend fun resolveOuoIfDirect(url: String, referer: String): String? {
+        val host = runCatching { URI(url).host }.getOrNull()
+        if (!isOuoHost(host)) return null
+
+        var current = url
+        repeat(4) {
+            val resp = runCatching {
+                app.get(
+                    current,
+                    referer = referer,
+                    allowRedirects = false,
+                    headers = mapOf(
+                        "User-Agent" to USER_AGENT,
+                        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+                    )
+                )
+            }.getOrNull() ?: return null
+
+            val location = resp.headers["Location"] ?: resp.headers["location"]
+            if (!location.isNullOrBlank()) {
+                val next = resolveRelativeOrNull(current, location) ?: return null
+                val nextHost = runCatching { URI(next).host }.getOrNull()
+                if (!isOuoHost(nextHost)) return next
+                current = next
+                return@repeat
+            }
+
+            val html = runCatching { resp.text }.getOrNull().orEmpty()
+            if (html.isBlank()) return null
+            if (html.contains("captcha", true) ||
+                html.contains("g-recaptcha", true) ||
+                html.contains("cf-turnstile", true) ||
+                html.contains("i'm a human", true) ||
+                html.contains("i am human", true)
+            ) return null
+
+            val nextFromMeta = Regex(
+                """http-equiv\s*=\s*["']refresh["'][^>]*content\s*=\s*["'][^"']*url\s*=\s*([^"'>\s]+)""",
+                RegexOption.IGNORE_CASE
+            ).find(html)?.groupValues?.getOrNull(1)
+                ?: Regex("""location\.(?:href|replace)\(['"]([^'"]+)['"]\)""", RegexOption.IGNORE_CASE)
+                    .find(html)?.groupValues?.getOrNull(1)
+                ?: Regex("""<a[^>]+href=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+                    .find(html)?.groupValues?.getOrNull(1)
+
+            val next = nextFromMeta?.let { resolveRelativeOrNull(current, it) } ?: return null
+            val nextHost = runCatching { URI(next).host }.getOrNull()
+            if (!isOuoHost(nextHost)) return next
+            current = next
+        }
+        return null
     }
 
     private fun Element.getImageAttr(): String {
