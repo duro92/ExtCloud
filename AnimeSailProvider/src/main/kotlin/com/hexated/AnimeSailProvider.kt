@@ -1,7 +1,6 @@
 package com.hexated
 
 import android.annotation.SuppressLint
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.webkit.CookieManager
@@ -28,7 +27,7 @@ import org.jsoup.nodes.Element
 
 class AnimeSailProvider : MainAPI() {
     override var mainUrl = "https://154.26.137.28"
-    override var name = "AnimeSail🍷"
+    override var name = "AnimeSail"
     override val hasMainPage = true
     override var lang = "id"
     override val hasDownloadSupport = true
@@ -59,17 +58,19 @@ class AnimeSailProvider : MainAPI() {
     private suspend fun request(url: String, ref: String? = null): NiceResponse {
         return app.get(
             url,
-            headers = mapOf("Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"),
-            cookies = mapOf("_as_ipin_ct" to "ID"),
-            referer = ref,
-            interceptor = turnstileInterceptor
+            interceptor = turnstileInterceptor,
+            headers = mapOf(
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36"
+            ),
+            referer = ref
         )
     }
 
     override val mainPage = mainPageOf(
-        "$mainUrl/page/" to "Episode Terbaru",
-        "$mainUrl/movie-terbaru/page/" to "Movie Terbaru",
-        "$mainUrl/genres/donghua/page/" to "Donghua"
+        "$mainUrl/rilisan-anime-terbaru/page/" to "Ongoing Anime",
+        "$mainUrl/rilisan-donghua-terbaru/page/" to "Ongoing Donghua",
+        "$mainUrl/movie-terbaru/page/" to "Movie"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -99,13 +100,20 @@ class AnimeSailProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): AnimeSearchResponse {
-        val href = getProperAnimeLink(fixUrlNull(this.selectFirst("a")?.attr("href")).toString())
-        val title = this.select(".tt > h2").text().trim()
+        val rawHref = fixUrlNull(this.selectFirst("a")?.attr("href")).toString()
+        val href = getProperAnimeLink(rawHref)
+        val rawTitle = this.selectFirst(".tt > h2")?.text() ?: ""
+        val title = rawTitle.replace(Regex("(?i)Episode\\s?\\d+"), "")
+            .replace(Regex("(?i)Subtitle Indonesia"), "")
+            .replace(Regex("(?i)Sub Indo"), "")
+            .trim()
+            .removeSuffix("-")
+            .trim()
         val posterUrl = fixUrlNull(this.selectFirst("div.limit img")?.attr("src"))
-        val epNum = this.selectFirst(".tt > h2")?.text()?.let {
-            Regex("Episode\\s?(\\d+)").find(it)?.groupValues?.getOrNull(1)?.toIntOrNull()
-        }
-        return newAnimeSearchResponse(title, href, TvType.Anime) {
+        val epNum = Regex("(?i)Episode\\s?(\\d+)").find(rawTitle)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        val typeText = this.selectFirst(".tt > span")?.text() ?: ""
+        val type = if (typeText.contains("Movie", ignoreCase = true)) TvType.AnimeMovie else TvType.Anime
+        return newAnimeSearchResponse(title, href, type) {
             this.posterUrl = posterUrl
             addSub(epNum)
         }
@@ -401,135 +409,96 @@ class AnimeSailProvider : MainAPI() {
 }
 
 class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") : Interceptor {
-    private fun clearCookie(cookieManager: CookieManager, domainUrl: String, name: String) {
-        cookieManager.setCookie(domainUrl, "$name=; Max-Age=0; path=/")
+    companion object {
+        private const val POLL_INTERVAL_MS = 500L
+        private const val MAX_ATTEMPTS = 30
     }
 
-    private fun mergeCookieHeaders(first: String?, second: String?): String {
-        return listOfNotNull(first, second)
-            .flatMap { it.split(";") }
+    private fun getCookieValue(domainUrl: String): String? {
+        val raw = CookieManager.getInstance().getCookie(domainUrl) ?: return null
+        return raw.split(";")
             .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .distinct()
-            .joinToString("; ")
+            .firstOrNull { it.startsWith("$targetCookie=") }
+            ?.substringAfter("=")
+            ?.takeIf { it.isNotBlank() }
     }
 
-    private fun isChallengePage(response: Response): Boolean {
-        if (response.code == 403 || response.code == 503) return true
-        if (!response.isSuccessful) return false
-
-        val contentType = response.header("Content-Type").orEmpty().lowercase()
-        if (!contentType.contains("text/html")) return false
-
-        val html = runCatching { response.peekBody(256_000).string().lowercase() }.getOrDefault("")
-        if (html.isBlank()) return false
-
-        return html.contains("cf-turnstile") ||
-            html.contains("challenge-platform") ||
-            html.contains("checking your browser") ||
-            html.contains("just a moment") ||
-            html.contains(targetCookie)
+    private fun invalidateCookie(domainUrl: String) {
+        CookieManager.getInstance().apply {
+            setCookie(domainUrl, "$targetCookie=; Max-Age=0")
+            flush()
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun intercept(chain: Interceptor.Chain): Response {
         val originalRequest = chain.request()
         val url = originalRequest.url.toString()
-
         val domainUrl = "${originalRequest.url.scheme}://${originalRequest.url.host}"
         val cookieManager = CookieManager.getInstance()
-
-        var currentCookies = cookieManager.getCookie(domainUrl) ?: ""
-        var userAgent = originalRequest.header("User-Agent") ?: ""
-
-        var needsRefresh = false
-        var initialResponse: Response? = null
-
-        if (currentCookies.contains(targetCookie)) {
-            val requestBuilder = originalRequest.newBuilder()
-                .header("Cookie", currentCookies)
-
-            initialResponse = chain.proceed(requestBuilder.build())
-
-            if (isChallengePage(initialResponse)) {
-                needsRefresh = true
-                initialResponse.close()
-            } else {
-                return initialResponse
-            }
-        } else {
-            needsRefresh = true
+        if (getCookieValue(domainUrl) != null) {
+            val response = chain.proceed(
+                originalRequest.newBuilder()
+                    .header("Cookie", cookieManager.getCookie(domainUrl) ?: "")
+                    .build()
+            )
+            if (response.code != 403 && response.code != 503) return response
+            response.close()
+            invalidateCookie(domainUrl)
         }
 
-        if (needsRefresh) {
-            val context = AcraApplication.context
-            if (context != null) {
-                val handler = Handler(Looper.getMainLooper())
-                var webView: WebView? = null
+        val context = AcraApplication.context
+            ?: return chain.proceed(originalRequest)
 
-                handler.post {
-                    try {
-                        val newWebView = WebView(context)
-                        webView = newWebView
+        val handler = Handler(Looper.getMainLooper())
+        var webView: WebView? = null
+        var resolvedUserAgent = originalRequest.header("User-Agent") ?: ""
 
-                        cookieManager.setAcceptCookie(true)
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                            cookieManager.setAcceptThirdPartyCookies(newWebView, true)
-                        }
-
-                        newWebView.settings.apply {
-                            javaScriptEnabled = true
-                            domStorageEnabled = true
-                            userAgentString = userAgent.ifBlank { userAgentString }
-                        }
-                        userAgent = newWebView.settings.userAgentString ?: userAgent
-
-                        newWebView.webViewClient = WebViewClient()
-
-                        clearCookie(cookieManager, domainUrl, targetCookie)
-                        clearCookie(cookieManager, domainUrl, "cf_clearance")
-                        clearCookie(cookieManager, domainUrl, "__cf_bm")
-                        clearCookie(cookieManager, domainUrl, "__cfseq")
-                        cookieManager.flush()
-
-                        newWebView.loadUrl(url)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
+        handler.post {
+            try {
+                val wv = WebView(context).also { webView = it }
+                wv.settings.apply {
+                    javaScriptEnabled = true
+                    domStorageEnabled = true
+                    if (resolvedUserAgent.isNotBlank()) userAgentString = resolvedUserAgent
+                    resolvedUserAgent = userAgentString
                 }
-
-                var attempts = 0
-                val maxAttempts = 30
-                while (attempts < maxAttempts) {
-                    Thread.sleep(1000)
-                    val checkCookies = cookieManager.getCookie(domainUrl) ?: ""
-
-                    if (checkCookies.contains(targetCookie) || checkCookies.contains("cf_clearance")) {
-                        cookieManager.flush()
-                        break
-                    }
-                    attempts++
-                }
-
-                handler.post {
-                    try {
-                        webView?.stopLoading()
-                        webView?.destroy()
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-                }
+                wv.webViewClient = WebViewClient()
+                wv.loadUrl(url)
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
-
-            currentCookies = cookieManager.getCookie(domainUrl) ?: ""
-            val mergedCookies = mergeCookieHeaders(originalRequest.header("Cookie"), currentCookies)
-            val newRequestBuilder = originalRequest.newBuilder()
-                .header("User-Agent", userAgent)
-                .header("Cookie", mergedCookies)
-
-            return chain.proceed(newRequestBuilder.build())
         }
 
-        return initialResponse ?: chain.proceed(originalRequest)
+        var attempts = 0
+        while (attempts < MAX_ATTEMPTS) {
+            Thread.sleep(POLL_INTERVAL_MS)
+            if (getCookieValue(domainUrl) != null) {
+                cookieManager.flush()
+                break
+            }
+            attempts++
+        }
+
+        handler.post {
+            try {
+                webView?.apply {
+                    stopLoading()
+                    clearCache(false)
+                    destroy()
+                }
+                webView = null
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        val finalCookies = cookieManager.getCookie(domainUrl) ?: ""
+        return chain.proceed(
+            originalRequest.newBuilder()
+                .header("Cookie", finalCookies)
+                .apply { if (resolvedUserAgent.isNotBlank()) header("User-Agent", resolvedUserAgent) }
+                .build()
+        )
     }
 }

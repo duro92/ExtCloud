@@ -174,7 +174,7 @@ class Dramabox : MainAPI() {
     }
 
     private fun DramaItem.toSearchResult(): SearchResponse? {
-        val id = id?.trim().orEmpty()
+        val id = getPreferredDramaId(this)
         val title = title?.trim().orEmpty()
         if (id.isBlank() || title.isBlank()) return null
 
@@ -192,6 +192,26 @@ class Dramabox : MainAPI() {
         ) {
             posterUrl = coverImage
         }
+    }
+
+    private fun getPreferredDramaId(item: DramaItem): String {
+        val fromCover = extractIdFromCover(item.coverImage)
+        if (!fromCover.isNullOrBlank()) return fromCover
+        return item.id?.trim().orEmpty()
+    }
+
+    private fun extractIdFromCover(coverImage: String?): String? {
+        val clean = coverImage
+            ?.substringBefore("@")
+            ?.substringBefore("?")
+            ?.trim()
+            .orEmpty()
+        if (clean.isBlank()) return null
+
+        val tail = clean.substringAfterLast("/")
+        val id = tail.substringBefore(".").trim()
+        if (id.length < 6 || !id.all { it.isDigit() }) return null
+        return id
     }
 
     private fun buildDramaUrl(
