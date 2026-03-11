@@ -922,6 +922,7 @@ open class EmturbovidExtractor : ExtractorApi() {
         val variants = parseMasterVariants(masterUrl, masterText).distinctBy { it.first }
         // Some Emturbovid variants resolve to Google video chunks that return 429
         // when a Referer/Origin header is forced. Keep playback headers minimal.
+        val playbackReferer = "$mainUrl/"
         val playbackHeaders = mapOf(
             "User-Agent" to ua,
             "Accept" to "*/*"
@@ -934,6 +935,7 @@ open class EmturbovidExtractor : ExtractorApi() {
                     url = masterUrl,
                     type = ExtractorLinkType.M3U8
                 ) {
+                    this.referer = playbackReferer
                     this.headers = playbackHeaders
                     this.quality = Qualities.Unknown.value
                 }
@@ -947,6 +949,7 @@ open class EmturbovidExtractor : ExtractorApi() {
                 url = variantUrl,
                 type = ExtractorLinkType.M3U8
             ) {
+                this.referer = playbackReferer
                 this.headers = playbackHeaders
                 this.quality = quality
             }
