@@ -831,13 +831,31 @@ open class EmturbovidExtractor : ExtractorApi() {
     }
 
     private fun parseUrlPlay(html: String): String? {
-        val raw = Regex("""var\s+urlPlay\s*=\s*(['"])(.*?)\1""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+        val directJs = Regex(
+            """(?:var|let|const)\s+urlPlay\s*=\s*(['"])(.*?)\1""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        )
             .find(html)
             ?.groupValues
             ?.getOrNull(2)
             ?.trim()
             ?.takeIf { it.isNotBlank() }
-            ?: return null
+
+        val dataHash = Regex("""\bdata-hash\s*=\s*(['"])(.*?)\1""", RegexOption.IGNORE_CASE)
+            .find(html)
+            ?.groupValues
+            ?.getOrNull(2)
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+
+        val firstM3u8 = Regex("""https?://[^\s"'<>]+\.m3u8[^\s"'<>]*""", RegexOption.IGNORE_CASE)
+            .find(html)
+            ?.groupValues
+            ?.getOrNull(0)
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+
+        val raw = directJs ?: dataHash ?: firstM3u8 ?: return null
 
         return raw
             .replace("\\/", "/")
@@ -869,61 +887,6 @@ open class EmturbovidExtractor : ExtractorApi() {
         return out
     }
 
-    private fun parseFirstMediaEntry(playlistUrl: String, text: String): String? {
-        val line = text.lineSequence()
-            .map { it.trim() }
-            .firstOrNull { it.isNotBlank() && !it.startsWith("#") }
-            ?: return null
-        return resolve(line, playlistUrl)
-    }
-
-    private fun isLikelyMediaChunk(bytes: ByteArray, contentType: String?): Boolean {
-        val ct = contentType?.lowercase().orEmpty()
-        if (ct.contains("image/") || ct.contains("text/html")) return false
-
-        if (bytes.size >= 8) {
-            // PNG signature
-            if (bytes[0] == 0x89.toByte() &&
-                bytes[1] == 0x50.toByte() &&
-                bytes[2] == 0x4E.toByte() &&
-                bytes[3] == 0x47.toByte()
-            ) return false
-
-            // fMP4 signature (....ftyp)
-            if (bytes[4] == 0x66.toByte() &&
-                bytes[5] == 0x74.toByte() &&
-                bytes[6] == 0x79.toByte() &&
-                bytes[7] == 0x70.toByte()
-            ) return true
-        }
-
-        // MPEG-TS sync byte at start or at 188-byte boundary.
-        if (bytes.isNotEmpty() && bytes[0] == 0x47.toByte()) return true
-        if (bytes.size > 188 && bytes[188] == 0x47.toByte()) return true
-
-        return ct.contains("video") || ct.contains("application/octet-stream")
-    }
-
-    private suspend fun isPlayableVariant(
-        variantUrl: String,
-        headers: Map<String, String>,
-        referer: String
-    ): Boolean {
-        val playlistText = runCatching {
-            app.get(variantUrl, headers = headers, referer = referer).text
-        }.getOrNull() ?: return false
-        if (!playlistText.contains("#EXTM3U", ignoreCase = true)) return false
-
-        val segmentUrl = parseFirstMediaEntry(variantUrl, playlistText) ?: return false
-        val segResp = runCatching {
-            app.get(segmentUrl, headers = headers, referer = referer)
-        }.getOrNull() ?: return false
-
-        val contentType = segResp.headers["Content-Type"] ?: segResp.headers["content-type"]
-        val body = runCatching { segResp.body.bytes() }.getOrNull() ?: return false
-        return isLikelyMediaChunk(body, contentType)
-    }
-
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val entryRef = referer ?: "$mainUrl/"
         val response = runCatching {
@@ -945,7 +908,7 @@ open class EmturbovidExtractor : ExtractorApi() {
 
         val playlistHeaders = mapOf(
             "User-Agent" to ua,
-            "Accept" to "*/*",
+            "Accept" to "application/vnd.apple.mpegurl,application/x-mpegURL,*/*",
             "Origin" to origin,
             "Referer" to pageUrl
         )
@@ -958,7 +921,6 @@ open class EmturbovidExtractor : ExtractorApi() {
 
         val variants = parseMasterVariants(masterUrl, masterText).distinctBy { it.first }
         if (variants.isEmpty()) {
-            if (!isPlayableVariant(masterUrl, playlistHeaders, pageUrl)) return null
             return listOf(
                 newExtractorLink(
                     source = name,
@@ -973,12 +935,7 @@ open class EmturbovidExtractor : ExtractorApi() {
             )
         }
 
-        val playable = variants.filter { (variantUrl, _) ->
-            isPlayableVariant(variantUrl, playlistHeaders, pageUrl)
-        }
-        if (playable.isEmpty()) return null
-
-        return playable.map { (variantUrl, quality) ->
+        return variants.map { (variantUrl, quality) ->
             newExtractorLink(
                 source = name,
                 name = if (quality == Qualities.Unknown.value) name else "$name ${quality}p",
@@ -990,6 +947,15 @@ open class EmturbovidExtractor : ExtractorApi() {
                 this.quality = quality
             }
         }
+    }
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        getUrl(url, referer)?.forEach(callback)
     }
 }
 
