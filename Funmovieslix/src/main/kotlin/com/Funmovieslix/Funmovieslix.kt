@@ -24,6 +24,7 @@ import com.lagradost.cloudstream3.newTvSeriesLoadResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Element
+import org.json.JSONObject
 import java.net.URL
 
 
@@ -218,6 +219,11 @@ class Funmovieslix : MainAPI() {
             val (url, depth) = queue.removeFirst()
             if (url.isBlank() || !visited.add(url)) continue
 
+            val mirroredUrl = resolveByseMirrorUrl(url)
+            if (!mirroredUrl.isNullOrBlank() && mirroredUrl != url && !visited.contains(mirroredUrl)) {
+                queue.addFirst(mirroredUrl to depth)
+            }
+
             loadExtractor(url, subtitleCallback, callback)
 
             if (depth >= 2) continue
@@ -243,6 +249,48 @@ class Funmovieslix : MainAPI() {
             .mapNotNull { iframe -> resolveUrl(url, iframe.attr("src")) }
             .filter { it != url }
             .distinct()
+    }
+
+    private fun extractMirrorCode(url: String): String? {
+        val clean = url.substringBefore("?").substringBefore("#").trimEnd('/')
+        val path = clean.substringAfter("://", clean).substringAfter("/", "")
+        if (path.isBlank()) return null
+
+        val segments = path.split("/").filter { it.isNotBlank() }
+        if (segments.isEmpty()) return null
+
+        val markers = setOf("e", "d", "download", "dwn", "gxtj")
+        val markerIndex = segments.indexOfFirst { it.lowercase() in markers }
+        if (markerIndex >= 0 && markerIndex + 1 < segments.size) {
+            return segments[markerIndex + 1]
+        }
+
+        return segments.firstOrNull { it.matches(Regex("^[A-Za-z0-9]{10,}$")) }
+    }
+
+    private suspend fun resolveByseMirrorUrl(url: String): String? {
+        val parsed = runCatching { URL(url) }.getOrNull() ?: return null
+        val host = parsed.host.lowercase()
+        if (host.contains("f75s.com")) return null
+
+        val code = extractMirrorCode(url) ?: return null
+        val origin = "${parsed.protocol}://${parsed.host}"
+        val embedUrl = "$origin/e/$code"
+        val apiUrl = "$origin/api/videos/$code/embed/details"
+
+        val headers = mapOf(
+            "X-Embed-Origin" to parsed.host,
+            "X-Embed-Referer" to embedUrl,
+            "X-Embed-Parent" to embedUrl,
+            "Referer" to embedUrl,
+            "Origin" to origin
+        )
+
+        val body = runCatching { app.get(apiUrl, headers = headers).text }.getOrNull() ?: return null
+        val json = runCatching { JSONObject(body) }.getOrNull() ?: return null
+        val mirrored = json.optString("embed_frame_url").trim()
+        if (mirrored.isBlank()) return null
+        return runCatching { URL(URL(origin), mirrored).toString() }.getOrNull()
     }
 
     fun getSearchQuality(parent: Element): SearchQuality {
