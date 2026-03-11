@@ -13,7 +13,8 @@ import java.net.URLDecoder
 import java.net.URLEncoder
 
 class Dramabox : MainAPI() {
-    override var mainUrl = buildBaseUrl()
+    override var mainUrl = buildMainUrl()
+    private val apiUrl = buildApiUrl()
     override var name = "DramaBox👌"
     override var lang = "id"
     override val hasMainPage = true
@@ -45,7 +46,7 @@ class Dramabox : MainAPI() {
         val keyword = query.trim()
         if (keyword.isBlank()) return emptyList()
 
-        val url = "$mainUrl/api/search?keyword=${encodeQuery(keyword)}&page=1&size=50"
+        val url = "$apiUrl/api/search?keyword=${encodeQuery(keyword)}&page=1&size=50"
         val response = tryParseJson<DramaListResponse>(app.get(url).text)
         return response?.data.orEmpty()
             .mapNotNull { it.toSearchResult() }
@@ -139,7 +140,7 @@ class Dramabox : MainAPI() {
     }
 
     private suspend fun fetchDramaList(path: String, page: Int): DramaListResponse? {
-        val prefix = if (path.startsWith("http", true)) path else "$mainUrl$path"
+        val prefix = if (path.startsWith("http", true)) path else "$apiUrl$path"
         val join = if (prefix.contains("?")) "&" else "?"
         val url = "$prefix${join}page=$page"
         val body = runCatching { app.get(url).text }.getOrNull() ?: return null
@@ -147,13 +148,13 @@ class Dramabox : MainAPI() {
     }
 
     private suspend fun fetchDramaDetail(dramaId: String): DramaDetailResponse? {
-        val url = "$mainUrl/api/dramas/$dramaId"
+        val url = "$apiUrl/api/dramas/$dramaId"
         val body = runCatching { app.get(url).text }.getOrNull() ?: return null
         return tryParseJson<DramaDetailResponse>(body)
     }
 
     private suspend fun fetchChapterForEpisode(dramaId: String, episodeNo: Int): ChapterContent? {
-        val url = "$mainUrl/api/chapters/video?book_id=$dramaId&episode=$episodeNo"
+        val url = "$apiUrl/api/chapters/video?book_id=$dramaId&episode=$episodeNo"
         val body = runCatching { app.post(url).text }.getOrNull() ?: return null
         val response = tryParseJson<ChapterResponse>(body) ?: return null
 
@@ -162,7 +163,7 @@ class Dramabox : MainAPI() {
     }
 
     private suspend fun inferEpisodeCount(dramaId: String): Int {
-        val url = "$mainUrl/api/chapters/video?book_id=$dramaId&episode=1"
+        val url = "$apiUrl/api/chapters/video?book_id=$dramaId&episode=1"
         val body = runCatching { app.post(url).text }.getOrNull() ?: return 0
         val response = tryParseJson<ChapterResponse>(body) ?: return 0
 
@@ -236,7 +237,18 @@ class Dramabox : MainAPI() {
 
     private fun LoadData.toJsonData(): String = this.toJson()
 
-    private fun buildBaseUrl(): String {
+    private fun buildMainUrl(): String {
+        val codes = intArrayOf(
+            104, 116, 116, 112, 115, 58, 47, 47,
+            119, 119, 119, 46, 100, 114, 97, 109, 97, 98, 111, 120, 46, 99, 111, 109,
+            47, 105, 110
+        )
+        val sb = StringBuilder()
+        for (code in codes) sb.append(code.toChar())
+        return sb.toString()
+    }
+
+    private fun buildApiUrl(): String {
         val codes = intArrayOf(
             104, 116, 116, 112, 115, 58, 47, 47,
             100, 98, 46, 104, 97, 102, 105, 122, 104, 105, 98, 110, 117, 115, 121, 97, 109,
