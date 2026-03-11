@@ -27,10 +27,8 @@ class Vidhideplus : VidhideExtractor() {
 }
 
 
-//Thanks to https://github.com/VVytai/jdownloader_mirror/blob/main/svn_trunk/src/jd/plugins/hoster/LixstreamCom.java
-class VideyV2 : ExtractorApi() {
-    override var name = "Videy"
-    override var mainUrl = "https://videy.tv"
+// Thanks to https://github.com/VVytai/jdownloader_mirror/blob/main/svn_trunk/src/jd/plugins/hoster/LixstreamCom.java
+abstract class LixstreamExtractor : ExtractorApi() {
     override val requiresReferer = false
 
     private val apiBase = "https://api.lixstreamingcaio.com/v2"
@@ -88,4 +86,14 @@ class VideyV2 : ExtractorApi() {
             }
         )
     }
+}
+
+class VideyV2 : LixstreamExtractor() {
+    override var name = "Videy"
+    override var mainUrl = "https://videy.tv"
+}
+
+class F75s : LixstreamExtractor() {
+    override var name = "F75s"
+    override var mainUrl = "https://f75s.com"
 }
