@@ -210,7 +210,7 @@ class F75s : ExtractorApi() {
             callback.invoke(
                 newExtractorLink(
                     source = this.name,
-                    name = sourceLabel?.let { "${this.name} $it" } ?: this.name,
+                    name = this.name,
                     url = streamUrl,
                     type = linkType
                 ) {
