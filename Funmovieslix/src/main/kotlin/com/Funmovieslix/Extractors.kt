@@ -102,6 +102,7 @@ class F75s : ExtractorApi() {
     override var name = "F75s"
     override var mainUrl = "https://f75s.com"
     override val requiresReferer = false
+    private val pathCodeRegex = Regex("^[A-Za-z0-9]{10,}$")
 
     private fun decodeBase64Url(value: String): ByteArray {
         val normalized = value + "=".repeat((4 - (value.length % 4)) % 4)
@@ -109,10 +110,20 @@ class F75s : ExtractorApi() {
     }
 
     private fun extractCode(url: String): String {
-        return url.substringBefore("?")
-            .substringBefore("#")
-            .trimEnd('/')
-            .substringAfterLast("/")
+        val clean = url.substringBefore("?").substringBefore("#").trimEnd('/')
+        val path = clean.substringAfter("://", clean).substringAfter("/", "")
+        if (path.isBlank()) return ""
+
+        val segments = path.split("/").filter { it.isNotBlank() }
+        if (segments.isEmpty()) return ""
+
+        val markers = setOf("e", "d", "download", "dwn", "gxtj")
+        val markerIndex = segments.indexOfFirst { it.lowercase() in markers }
+        if (markerIndex >= 0 && markerIndex + 1 < segments.size) {
+            return segments[markerIndex + 1]
+        }
+
+        return segments.firstOrNull { pathCodeRegex.matches(it) } ?: segments.last()
     }
 
     private fun decryptPlayback(playback: JSONObject): JSONObject? {

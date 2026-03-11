@@ -24,6 +24,7 @@ import com.lagradost.cloudstream3.newTvSeriesLoadResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Element
+import java.net.URL
 
 
 class Funmovieslix : MainAPI() {
@@ -198,20 +199,50 @@ class Funmovieslix : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        // 1. Get all <script> tags that contain "embeds"
         val scriptContent = document.select("script")
             .map { it.data() }
             .firstOrNull { it.contains("const embeds") }
             ?: return false
 
-        val regex = Regex("""https:\\/\\/[^"]+""")
+        val regex = Regex("""https:\\/\\/[^"']+|https://[^"']+""")
         val urls = regex.findAll(scriptContent)
-            .map { it.value.replace("\\/", "/").replace("\\", "") } // unescape \/ → / and remove \
+            .map { it.value.replace("\\/", "/").replace("\\", "") }
+            .distinct()
             .toList()
-        urls.forEach { url ->
-            loadExtractor(url,subtitleCallback,callback)
+
+        val queue = ArrayDeque<Pair<String, Int>>()
+        urls.forEach { queue.add(it to 0) }
+        val visited = mutableSetOf<String>()
+
+        while (queue.isNotEmpty()) {
+            val (url, depth) = queue.removeFirst()
+            if (url.isBlank() || !visited.add(url)) continue
+
+            loadExtractor(url, subtitleCallback, callback)
+
+            if (depth >= 2) continue
+            extractNestedIframeUrls(url).forEach { nestedUrl ->
+                if (nestedUrl.isNotBlank() && !visited.contains(nestedUrl)) {
+                    queue.add(nestedUrl to (depth + 1))
+                }
+            }
         }
-        return true
+        return visited.isNotEmpty()
+    }
+
+    private suspend fun extractNestedIframeUrls(url: String): List<String> {
+        val doc = runCatching { app.get(url, referer = mainUrl).document }.getOrNull() ?: return emptyList()
+
+        fun resolveUrl(base: String, target: String): String? {
+            val raw = target.trim()
+            if (raw.isBlank()) return null
+            return runCatching { URL(URL(base), raw).toString() }.getOrNull()
+        }
+
+        return doc.select("iframe[src]")
+            .mapNotNull { iframe -> resolveUrl(url, iframe.attr("src")) }
+            .filter { it != url }
+            .distinct()
     }
 
     fun getSearchQuality(parent: Element): SearchQuality {
@@ -232,3 +263,4 @@ class Funmovieslix : MainAPI() {
     }
 
 }
+
