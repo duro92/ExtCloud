@@ -12,7 +12,7 @@ import java.net.URLEncoder
 
 class Pmsm : MainAPI() {
     override var mainUrl = "https://ww192.pencurimoviesubmalay.motorcycles"
-    override var name = "pmsm😁"
+    override var name = "PMSM😁"
     override val hasMainPage = true
     override var lang = "id"
     override val hasDownloadSupport = true

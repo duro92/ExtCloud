@@ -10,5 +10,11 @@ class PmsmPlugin : Plugin() {
         registerMainAPI(Pmsm())
         registerExtractorAPI(DhtprePmsm())
         registerExtractorAPI(NetuPmsm())
+        registerExtractorAPI(Playerxupns())
+        registerExtractorAPI(Playerxp2p())
+        registerExtractorAPI(Playerxseek())
+        registerExtractorAPI(Playerxrpms())
+        registerExtractorAPI(Player4me())
+        registerExtractorAPI(Ezplayer())
     }
 }
