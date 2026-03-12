@@ -920,11 +920,9 @@ open class EmturbovidExtractor : ExtractorApi() {
         if (!masterText.contains("#EXTM3U", ignoreCase = true)) return null
 
         val variants = parseMasterVariants(masterUrl, masterText).distinctBy { it.first }
-        // Some Emturbovid variants resolve to Google video chunks that return 429
-        // when a Referer/Origin header is forced. Keep playback headers minimal.
-        val playbackReferer = "$mainUrl/"
+        // Some Emturbovid variants resolve to Google video chunks that can 429
+        // if specific Referer/Origin/User-Agent values are forced.
         val playbackHeaders = mapOf(
-            "User-Agent" to ua,
             "Accept" to "*/*"
         )
         if (variants.isEmpty()) {
@@ -935,7 +933,6 @@ open class EmturbovidExtractor : ExtractorApi() {
                     url = masterUrl,
                     type = ExtractorLinkType.M3U8
                 ) {
-                    this.referer = playbackReferer
                     this.headers = playbackHeaders
                     this.quality = Qualities.Unknown.value
                 }
@@ -949,7 +946,6 @@ open class EmturbovidExtractor : ExtractorApi() {
                 url = variantUrl,
                 type = ExtractorLinkType.M3U8
             ) {
-                this.referer = playbackReferer
                 this.headers = playbackHeaders
                 this.quality = quality
             }
