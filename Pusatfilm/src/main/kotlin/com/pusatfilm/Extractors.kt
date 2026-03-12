@@ -887,6 +887,13 @@ open class EmturbovidExtractor : ExtractorApi() {
         return out
     }
 
+    private fun isGoogleBackedPlaylist(playlistText: String): Boolean {
+        return Regex(
+            """https?://[^\s"'<>]*(?:googleusercontent\.com|googlevideo\.com)[^\s"'<>]*""",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(playlistText)
+    }
+
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
         val entryRef = referer ?: "$mainUrl/"
         val response = runCatching {
@@ -920,12 +927,12 @@ open class EmturbovidExtractor : ExtractorApi() {
         if (!masterText.contains("#EXTM3U", ignoreCase = true)) return null
 
         val variants = parseMasterVariants(masterUrl, masterText).distinctBy { it.first }
-        // Some Emturbovid variants resolve to Google video chunks that can 429
-        // if specific Referer/Origin/User-Agent values are forced.
-        val playbackHeaders = mapOf(
-            "Accept" to "*/*"
-        )
         if (variants.isEmpty()) {
+            val useDriveReferer = isGoogleBackedPlaylist(masterText)
+            val playbackHeaders = buildMap {
+                put("Accept", "*/*")
+                if (useDriveReferer) put("Referer", "https://drive.google.com/")
+            }
             return listOf(
                 newExtractorLink(
                     source = name,
@@ -933,6 +940,7 @@ open class EmturbovidExtractor : ExtractorApi() {
                     url = masterUrl,
                     type = ExtractorLinkType.M3U8
                 ) {
+                    if (useDriveReferer) this.referer = "https://drive.google.com/"
                     this.headers = playbackHeaders
                     this.quality = Qualities.Unknown.value
                 }
@@ -940,12 +948,21 @@ open class EmturbovidExtractor : ExtractorApi() {
         }
 
         return variants.map { (variantUrl, quality) ->
+            val variantText = runCatching {
+                app.get(variantUrl, referer = pageUrl, headers = playlistHeaders).text
+            }.getOrNull().orEmpty()
+            val useDriveReferer = variantText.isNotBlank() && isGoogleBackedPlaylist(variantText)
+            val playbackHeaders = buildMap {
+                put("Accept", "*/*")
+                if (useDriveReferer) put("Referer", "https://drive.google.com/")
+            }
             newExtractorLink(
                 source = name,
                 name = if (quality == Qualities.Unknown.value) name else "$name ${quality}p",
                 url = variantUrl,
                 type = ExtractorLinkType.M3U8
             ) {
+                if (useDriveReferer) this.referer = "https://drive.google.com/"
                 this.headers = playbackHeaders
                 this.quality = quality
             }
