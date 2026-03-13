@@ -16,6 +16,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.getAndUnpack
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.nicehttp.NiceResponse
@@ -24,6 +25,7 @@ import okhttp3.Interceptor
 import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
+import java.net.URI
 import java.net.URLDecoder
 
 class AnimeSailProvider : MainAPI() {
@@ -366,6 +368,10 @@ class AnimeSailProvider : MainAPI() {
     }
 
     private fun normalizeMirrorUrl(raw: String?): String? {
+        return normalizeUrlFromBase(raw, mainUrl)
+    }
+
+    private fun normalizeUrlFromBase(raw: String?, baseUrl: String?): String? {
         val clean = raw?.trim()
             ?.removePrefix("\"")
             ?.removeSuffix("\"")
@@ -373,14 +379,23 @@ class AnimeSailProvider : MainAPI() {
             ?.removeSuffix("'")
             ?.replace("\\/", "/")
             ?.replace("&amp;", "&")
+            ?.replace("\\u0026", "&")
             ?.trim()
             ?: return null
-        if (clean.isBlank()) return null
+        if (clean.isBlank() || clean.startsWith("javascript:", true) || clean.startsWith("data:", true)) {
+            return null
+        }
+
+        fun resolveWithBase(path: String): String? {
+            if (baseUrl.isNullOrBlank()) return null
+            return runCatching { URI(baseUrl).resolve(path).toString() }.getOrNull()
+        }
+
         return when {
             clean.startsWith("http://", true) || clean.startsWith("https://", true) -> clean
             clean.startsWith("//") -> "https:$clean"
-            clean.startsWith("/") -> fixUrl(clean)
-            else -> null
+            clean.startsWith("/") -> resolveWithBase(clean) ?: runCatching { fixUrl(clean) }.getOrNull()
+            else -> resolveWithBase(clean)
         }
     }
 
@@ -393,6 +408,7 @@ class AnimeSailProvider : MainAPI() {
             "pixeldrain",
             "pompom",
             "pancal",
+            "myvidplay",
             "mixdrop",
             "mp4upload",
             "uservideo",
@@ -450,6 +466,11 @@ class AnimeSailProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ) {
         val normalizedUrl = normalizeYourUploadUrl(url)
+        if (isCustomManagedHost(normalizedUrl)) {
+            tryCustomLocalExtractor(normalizedUrl, serverName, quality, referer, callback)
+            return
+        }
+        if (tryCustomLocalExtractor(normalizedUrl, serverName, quality, referer, callback)) return
         if (tryLoadMp4UploadDirect(normalizedUrl, serverName, quality, callback)) return
 
         loadExtractor(normalizedUrl, referer, subtitleCallback) { link ->
@@ -482,6 +503,285 @@ class AnimeSailProvider : MainAPI() {
             url.replace("/watch/", "/embed/", true)
         } else {
             url
+        }
+    }
+
+    private fun isCustomManagedHost(url: String): Boolean {
+        val lower = url.lowercase()
+        return lower.contains("pixeldrain.com") ||
+            lower.contains("pompom") ||
+            lower.contains("pancal") ||
+            lower.contains("myvidplay.com")
+    }
+
+    private suspend fun tryCustomLocalExtractor(
+        url: String,
+        serverName: String,
+        quality: Int?,
+        referer: String?,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val lower = url.lowercase()
+        return when {
+            lower.contains("myvidplay.com") -> {
+                tryMyVidPlayDirect(url, serverName, quality, referer, callback)
+            }
+            lower.contains("pixeldrain.com") -> {
+                tryPixeldrainDirect(url, serverName, quality, callback) ||
+                    tryMirrorCrawlerExtractor(url, serverName, quality, referer, callback)
+            }
+            lower.contains("yourupload.com") -> {
+                tryMirrorCrawlerExtractor(normalizeYourUploadUrl(url), serverName, quality, referer, callback)
+            }
+            lower.contains("pompom") || lower.contains("pancal") -> {
+                tryMirrorCrawlerExtractor(url, serverName, quality, referer, callback)
+            }
+            else -> false
+        }
+    }
+
+    private suspend fun tryPixeldrainDirect(
+        url: String,
+        serverName: String,
+        quality: Int?,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val id = listOf(
+            Regex("""pixeldrain\.com/(?:u|l)/([A-Za-z0-9_-]+)""", RegexOption.IGNORE_CASE),
+            Regex("""pixeldrain\.com/api/file/([A-Za-z0-9_-]+)""", RegexOption.IGNORE_CASE),
+        ).firstNotNullOfOrNull { rgx ->
+            rgx.find(url)?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }
+        } ?: return false
+
+        val directUrl = "https://pixeldrain.com/api/file/$id?download"
+        val pixeldrainReferer = "https://pixeldrain.com/"
+        val probe = runCatching {
+            app.get(
+                directUrl,
+                referer = pixeldrainReferer,
+                headers = mapOf(
+                    "User-Agent" to USER_AGENT,
+                    "Referer" to pixeldrainReferer,
+                    "Origin" to "https://pixeldrain.com",
+                    "Range" to "bytes=0-1023"
+                )
+            )
+        }.getOrNull() ?: return false
+
+        val contentType = (probe.headers["Content-Type"] ?: probe.headers["content-type"]).orEmpty().lowercase()
+        if (contentType.contains("text/html")) return false
+
+        callback.invoke(
+            newExtractorLink(
+                source = serverName,
+                name = serverName,
+                url = directUrl,
+                type = ExtractorLinkType.VIDEO
+            ) {
+                this.referer = pixeldrainReferer
+                this.quality = quality ?: Qualities.Unknown.value
+                this.headers = mapOf(
+                    "User-Agent" to USER_AGENT,
+                    "Referer" to pixeldrainReferer,
+                    "Origin" to "https://pixeldrain.com"
+                )
+            }
+        )
+        return true
+    }
+
+    private suspend fun tryMyVidPlayDirect(
+        url: String,
+        serverName: String,
+        quality: Int?,
+        referer: String?,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val pageUrl = normalizeUrlFromBase(url, referer ?: mainUrl) ?: return false
+        val pageResponse = runCatching {
+            app.get(
+                pageUrl,
+                referer = referer ?: mainUrl,
+                headers = mapOf(
+                    "User-Agent" to USER_AGENT,
+                    "Referer" to (referer ?: mainUrl)
+                )
+            )
+        }.getOrNull() ?: return false
+
+        val pageText = pageResponse.text
+        val passPath = Regex("""/pass_md5/[^"'\\s<]+""", RegexOption.IGNORE_CASE)
+            .find(pageText)
+            ?.value
+            ?.trim()
+            ?: return false
+
+        val passUrl = normalizeUrlFromBase(passPath, pageUrl) ?: return false
+        val token = passPath.substringAfterLast("/").takeIf { it.isNotBlank() }
+            ?: Regex("""token=([A-Za-z0-9]+)""", RegexOption.IGNORE_CASE)
+                .find(pageText)
+                ?.groupValues
+                ?.getOrNull(1)
+            ?: return false
+
+        val passResponse = runCatching {
+            app.get(
+                passUrl,
+                referer = pageUrl,
+                headers = mapOf(
+                    "User-Agent" to USER_AGENT,
+                    "Referer" to pageUrl
+                )
+            )
+        }.getOrNull() ?: return false
+
+        val baseStream = passResponse.text
+            .lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.startsWith("http://", true) || it.startsWith("https://", true) }
+            ?: return false
+
+        val randomPad = randomAlphaNum(10)
+        val expiry = System.currentTimeMillis()
+        val separator = if (baseStream.contains("?")) "&" else "?"
+        val finalUrl = "${baseStream}${randomPad}${separator}token=$token&expiry=$expiry"
+
+        val probe = runCatching {
+            app.get(
+                finalUrl,
+                referer = pageUrl,
+                headers = mapOf(
+                    "User-Agent" to USER_AGENT,
+                    "Referer" to pageUrl,
+                    "Range" to "bytes=0-4095"
+                )
+            )
+        }.getOrNull() ?: return false
+
+        val contentType = (probe.headers["Content-Type"] ?: probe.headers["content-type"]).orEmpty().lowercase()
+        if (!(contentType.contains("video") || contentType.contains("octet-stream"))) return false
+
+        callback.invoke(
+            newExtractorLink(
+                source = serverName,
+                name = serverName,
+                url = finalUrl,
+                type = INFER_TYPE
+            ) {
+                this.referer = pageUrl
+                this.quality = quality ?: Qualities.Unknown.value
+                this.headers = mapOf(
+                    "User-Agent" to USER_AGENT,
+                    "Referer" to pageUrl
+                )
+            }
+        )
+        return true
+    }
+
+    private suspend fun tryMirrorCrawlerExtractor(
+        url: String,
+        serverName: String,
+        quality: Int?,
+        referer: String?,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val queue = ArrayDeque<Pair<String, String?>>()
+        val visited = linkedSetOf<String>()
+        queue.add(url to referer)
+        var safety = 0
+
+        while (queue.isNotEmpty() && safety++ < 12) {
+            val (currentUrl, currentReferer) = queue.removeFirst()
+            val current = normalizeUrlFromBase(currentUrl, currentReferer ?: mainUrl) ?: continue
+            if (!visited.add(current)) continue
+
+            if (isDirectMediaUrl(current)) {
+                emitDirectMediaLink(current, serverName, quality, currentReferer ?: referer, callback)
+                return true
+            }
+
+            val response = runCatching {
+                app.get(
+                    current,
+                    referer = currentReferer ?: mainUrl,
+                    headers = mapOf(
+                        "User-Agent" to USER_AGENT,
+                        "Referer" to (currentReferer ?: mainUrl)
+                    )
+                )
+            }.getOrNull() ?: continue
+
+            val discovered = linkedSetOf<String>()
+            response.document.select("source[src], video[src], iframe[src], a[href], script[src]").forEach { el ->
+                val raw = el.attr("src").ifBlank { el.attr("href") }
+                normalizeUrlFromBase(raw, current)?.let(discovered::add)
+            }
+            discovered.addAll(extractCandidatesFromText(response.text, current))
+
+            response.document.select("script").forEach { script ->
+                val data = script.data().trim()
+                if (data.isBlank()) return@forEach
+                discovered.addAll(extractCandidatesFromText(data, current))
+                if (data.contains("eval(function(p,a,c,k,e,d)")) {
+                    runCatching { getAndUnpack(data) }
+                        .getOrNull()
+                        ?.let { unpacked -> discovered.addAll(extractCandidatesFromText(unpacked, current)) }
+                }
+            }
+
+            val direct = discovered.firstOrNull { isDirectMediaUrl(it) }
+            if (!direct.isNullOrBlank()) {
+                emitDirectMediaLink(direct, serverName, quality, current, callback)
+                return true
+            }
+
+            discovered
+                .filter { shouldQueueCustomCandidate(it, current) }
+                .forEach { next -> queue.add(next to current) }
+        }
+
+        return false
+    }
+
+    private fun extractCandidatesFromText(text: String, baseUrl: String): Set<String> {
+        if (text.isBlank()) return emptySet()
+        val out = linkedSetOf<String>()
+        val patterns = listOf(
+            Regex("""https?://[^\s"'<>\\]+""", RegexOption.IGNORE_CASE),
+            Regex("""(?:file|src|source|video_url|play_url|hls)\s*[:=]\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE),
+            Regex("""["']((?:/|//)[^"']+\.(?:m3u8|mp4)[^"']*)["']""", RegexOption.IGNORE_CASE),
+        )
+
+        patterns.forEach { rgx ->
+            rgx.findAll(text).forEach { match ->
+                val raw = match.groupValues.getOrNull(1)?.takeIf { it.isNotBlank() } ?: match.value
+                normalizeUrlFromBase(raw, baseUrl)?.let(out::add)
+            }
+        }
+        return out
+    }
+
+    private fun shouldQueueCustomCandidate(candidate: String, currentUrl: String): Boolean {
+        val lower = candidate.lowercase()
+        if (isDirectMediaUrl(lower)) return false
+        if (lower.startsWith("javascript:") || lower.startsWith("data:")) return false
+        if (lower.contains("/utils/player/")) return true
+
+        val hints = listOf("yourupload", "pixeldrain", "pompom", "pancal", "myvidplay", "aghanim", "uservideo", "mp4upload")
+        if (hints.any { lower.contains(it) }) return true
+
+        val currentHost = runCatching { URI(currentUrl).host?.lowercase().orEmpty() }.getOrDefault("")
+        val nextHost = runCatching { URI(candidate).host?.lowercase().orEmpty() }.getOrDefault("")
+        return currentHost.isNotBlank() && currentHost == nextHost
+    }
+
+    private fun randomAlphaNum(length: Int): String {
+        val chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+        return buildString(length) {
+            repeat(length) {
+                append(chars.random())
+            }
         }
     }
 
