@@ -8,7 +8,6 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import java.net.URI
 import java.net.URLEncoder
 
 class Pmsm : MainAPI() {
@@ -159,10 +158,6 @@ class Pmsm : MainAPI() {
             if (emitted.size == before && fixed.contains("larhu.website", true)) {
                 extractLarhuStreams(fixed, wrappedCallback)
             }
-            // Some server responses point to yandexcdn pages without direct extractor support.
-            if (emitted.size == before && fixed.contains("yandexcdn.com", true)) {
-                extractYandexStreams(fixed, pageUrl, wrappedCallback)
-            }
         }
 
         document.select("div.display-video iframe[src], iframe.metaframe[src], div#display-noajax iframe[src]")
@@ -191,6 +186,7 @@ class Pmsm : MainAPI() {
                 val token = decodeZtshcodeToken(embedRaw)
                 if (!token.isNullOrBlank()) {
                     emitExtractor("https://yandexcdn.com/f/$token")
+                    emitExtractor("https://yandexcdn.com/e/$token")
                     return@forEach
                 }
             }
@@ -360,80 +356,6 @@ class Pmsm : MainAPI() {
                 )
             }
         }
-    }
-
-    private suspend fun extractYandexStreams(
-        embedUrl: String,
-        referer: String,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        val pages = linkedSetOf(embedUrl)
-        val firstPage = runCatching {
-            app.get(embedUrl, referer = referer, timeout = 20).text
-        }.getOrNull()
-
-        val iframeSrc = firstPage?.let { page ->
-            Regex("""<iframe[^>]+src=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
-                .find(page)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?.trim()
-        }
-        if (!iframeSrc.isNullOrBlank()) {
-            resolveUrl(embedUrl, iframeSrc)?.let { pages.add(it) }
-        }
-
-        val streams = mutableSetOf<String>()
-        pages.forEach { pageUrl ->
-            val page = if (pageUrl == embedUrl) {
-                firstPage
-            } else {
-                runCatching {
-                    app.get(pageUrl, referer = referer, timeout = 20).text
-                }.getOrNull()
-            } ?: return@forEach
-
-            listOf(
-                Regex("""(?:https?:)?//[^\s"'\\]+\.m3u8[^\s"'\\]*""", RegexOption.IGNORE_CASE),
-                Regex("""(?:https?:)?//[^\s"'\\]+\.mp4(?:\?[^\s"'\\]*)?""", RegexOption.IGNORE_CASE)
-            ).forEach { pattern ->
-                pattern.findAll(page).forEach { match ->
-                    val normalized = resolveUrl(pageUrl, match.value)
-                        ?.replace("\\/", "/")
-                        ?.trim()
-                    if (!normalized.isNullOrBlank()) streams.add(normalized)
-                }
-            }
-        }
-
-        val yandexReferer = pages.firstOrNull { it.contains("/e/") } ?: "https://yandexcdn.com/"
-        val yandexOrigin = "https://yandexcdn.com"
-        streams.forEach { stream ->
-            val type = if (stream.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-            callback(
-                newExtractorLink(
-                    source = name,
-                    name = "$name Yandex",
-                    url = stream,
-                    type = type
-                ) {
-                    this.referer = yandexReferer
-                    this.headers = mapOf(
-                        "Referer" to yandexReferer,
-                        "Origin" to yandexOrigin
-                    )
-                    this.quality = Qualities.Unknown.value
-                }
-            )
-        }
-    }
-
-    private fun resolveUrl(base: String, target: String): String? {
-        val cleaned = target.replace("\\/", "/").trim()
-        if (cleaned.isBlank()) return null
-        if (cleaned.startsWith("http://") || cleaned.startsWith("https://")) return cleaned
-        if (cleaned.startsWith("//")) return "https:$cleaned"
-        return runCatching { URI(base).resolve(cleaned).toString() }.getOrNull()
     }
 
     private fun decodeZtshcodeToken(raw: String): String? {
