@@ -13,7 +13,7 @@ import java.net.URLEncoder
 
 class Pmsm : MainAPI() {
     override var mainUrl = "https://ww192.pencurimoviesubmalay.motorcycles"
-    override var name = "PMSM"
+    override var name = "PMSM😁"
     override val hasMainPage = true
     override var lang = "id"
     override val hasDownloadSupport = true
@@ -191,8 +191,8 @@ class Pmsm : MainAPI() {
                 val token = decodeZtshcodeToken(embedRaw)
                 if (!token.isNullOrBlank()) {
                     emitExtractor("https://yandexcdn.com/f/$token")
+                    return@forEach
                 }
-                return@forEach
             }
             val embedUrl = extractEmbedUrl(embedRaw) ?: return@forEach
             emitExtractor(embedUrl)
@@ -393,30 +393,38 @@ class Pmsm : MainAPI() {
                 }.getOrNull()
             } ?: return@forEach
 
-            Regex("""https?://[^\s"'\\]+\.m3u8[^\s"'\\]*""", RegexOption.IGNORE_CASE)
-                .findAll(page)
-                .forEach { streams.add(it.value.replace("\\/", "/")) }
-            Regex("""https?://[^\s"'\\]+\.mp4[^\s"'\\]*""", RegexOption.IGNORE_CASE)
-                .findAll(page)
-                .forEach { streams.add(it.value.replace("\\/", "/")) }
+            listOf(
+                Regex("""(?:https?:)?//[^\s"'\\]+\.m3u8[^\s"'\\]*""", RegexOption.IGNORE_CASE),
+                Regex("""(?:https?:)?//[^\s"'\\]+\.mp4(?:\?[^\s"'\\]*)?""", RegexOption.IGNORE_CASE)
+            ).forEach { pattern ->
+                pattern.findAll(page).forEach { match ->
+                    val normalized = resolveUrl(pageUrl, match.value)
+                        ?.replace("\\/", "/")
+                        ?.trim()
+                    if (!normalized.isNullOrBlank()) streams.add(normalized)
+                }
+            }
         }
 
+        val yandexReferer = pages.firstOrNull { it.contains("/e/") } ?: "https://yandexcdn.com/"
+        val yandexOrigin = "https://yandexcdn.com"
         streams.forEach { stream ->
-            if (stream.contains(".m3u8", true)) {
-                M3u8Helper.generateM3u8(name, stream, referer).forEach(callback)
-            } else {
-                callback(
-                    newExtractorLink(
-                        source = name,
-                        name = "$name Yandex",
-                        url = stream,
-                        type = ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = referer
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
-            }
+            val type = if (stream.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+            callback(
+                newExtractorLink(
+                    source = name,
+                    name = "$name Yandex",
+                    url = stream,
+                    type = type
+                ) {
+                    this.referer = yandexReferer
+                    this.headers = mapOf(
+                        "Referer" to yandexReferer,
+                        "Origin" to yandexOrigin
+                    )
+                    this.quality = Qualities.Unknown.value
+                }
+            )
         }
     }
 

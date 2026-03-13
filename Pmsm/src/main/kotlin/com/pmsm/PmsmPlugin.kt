@@ -16,5 +16,6 @@ class PmsmPlugin : Plugin() {
         registerExtractorAPI(Playerxrpms())
         registerExtractorAPI(Player4me())
         registerExtractorAPI(Ezplayer())
+        registerExtractorAPI(YandexcdnPmsm())
     }
 }
