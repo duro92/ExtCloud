@@ -8,11 +8,12 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import java.net.URI
 import java.net.URLEncoder
 
 class Pmsm : MainAPI() {
     override var mainUrl = "https://ww192.pencurimoviesubmalay.motorcycles"
-    override var name = "PMSM😁"
+    override var name = "PMSM"
     override val hasMainPage = true
     override var lang = "id"
     override val hasDownloadSupport = true
@@ -158,6 +159,10 @@ class Pmsm : MainAPI() {
             if (emitted.size == before && fixed.contains("larhu.website", true)) {
                 extractLarhuStreams(fixed, wrappedCallback)
             }
+            // Some server responses point to yandexcdn pages without direct extractor support.
+            if (emitted.size == before && fixed.contains("yandexcdn.com", true)) {
+                extractYandexStreams(fixed, pageUrl, wrappedCallback)
+            }
         }
 
         document.select("div.display-video iframe[src], iframe.metaframe[src], div#display-noajax iframe[src]")
@@ -182,6 +187,13 @@ class Pmsm : MainAPI() {
             }.getOrNull() ?: return@forEach
 
             val embedRaw = response.embedUrl ?: return@forEach
+            if (response.type.equals("ztshcode", true)) {
+                val token = decodeZtshcodeToken(embedRaw)
+                if (!token.isNullOrBlank()) {
+                    emitExtractor("https://yandexcdn.com/f/$token")
+                }
+                return@forEach
+            }
             val embedUrl = extractEmbedUrl(embedRaw) ?: return@forEach
             emitExtractor(embedUrl)
         }
@@ -350,6 +362,93 @@ class Pmsm : MainAPI() {
         }
     }
 
+    private suspend fun extractYandexStreams(
+        embedUrl: String,
+        referer: String,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val pages = linkedSetOf(embedUrl)
+        val firstPage = runCatching {
+            app.get(embedUrl, referer = referer, timeout = 20).text
+        }.getOrNull()
+
+        val iframeSrc = firstPage?.let { page ->
+            Regex("""<iframe[^>]+src=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+                .find(page)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.trim()
+        }
+        if (!iframeSrc.isNullOrBlank()) {
+            resolveUrl(embedUrl, iframeSrc)?.let { pages.add(it) }
+        }
+
+        val streams = mutableSetOf<String>()
+        pages.forEach { pageUrl ->
+            val page = if (pageUrl == embedUrl) {
+                firstPage
+            } else {
+                runCatching {
+                    app.get(pageUrl, referer = referer, timeout = 20).text
+                }.getOrNull()
+            } ?: return@forEach
+
+            Regex("""https?://[^\s"'\\]+\.m3u8[^\s"'\\]*""", RegexOption.IGNORE_CASE)
+                .findAll(page)
+                .forEach { streams.add(it.value.replace("\\/", "/")) }
+            Regex("""https?://[^\s"'\\]+\.mp4[^\s"'\\]*""", RegexOption.IGNORE_CASE)
+                .findAll(page)
+                .forEach { streams.add(it.value.replace("\\/", "/")) }
+        }
+
+        streams.forEach { stream ->
+            if (stream.contains(".m3u8", true)) {
+                M3u8Helper.generateM3u8(name, stream, referer).forEach(callback)
+            } else {
+                callback(
+                    newExtractorLink(
+                        source = name,
+                        name = "$name Yandex",
+                        url = stream,
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = referer
+                        this.quality = Qualities.Unknown.value
+                    }
+                )
+            }
+        }
+    }
+
+    private fun resolveUrl(base: String, target: String): String? {
+        val cleaned = target.replace("\\/", "/").trim()
+        if (cleaned.isBlank()) return null
+        if (cleaned.startsWith("http://") || cleaned.startsWith("https://")) return cleaned
+        if (cleaned.startsWith("//")) return "https:$cleaned"
+        return runCatching { URI(base).resolve(cleaned).toString() }.getOrNull()
+    }
+
+    private fun decodeZtshcodeToken(raw: String): String? {
+        val encoded = Regex("""<div[^>]+id=["']([0-9a-fA-F]+)["']""")
+            .find(raw)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.trim()
+            ?: return null
+
+        val decoded = buildString {
+            encoded.chunked(3).forEach { chunk ->
+                chunk.toIntOrNull(16)?.let { append(it.toChar()) }
+            }
+        }
+        if (decoded.isBlank()) return null
+
+        return Regex("""["']v["']\s*:\s*["']([a-zA-Z0-9_-]+)["']""")
+            .find(decoded)
+            ?.groupValues
+            ?.getOrNull(1)
+    }
+
     private fun extractYear(text: String?): Int? {
         return Regex("""(19|20)\d{2}""").find(text.orEmpty())?.value?.toIntOrNull()
     }
@@ -366,3 +465,4 @@ class Pmsm : MainAPI() {
         @param:JsonProperty("msg") val msg: String? = null
     )
 }
+
