@@ -263,6 +263,19 @@ class AnimeSailProvider : MainAPI() {
                 val response = request(normalized, ref = referer)
                 val text = response.text
                 val playerDoc = response.document
+
+                if (isCustomManagedServer(serverName) && tryPassMd5PatternDirect(
+                        normalized,
+                        serverName,
+                        quality,
+                        referer,
+                        callback,
+                        prefetchedPageText = text
+                    )
+                ) {
+                    return
+                }
+
                 val nestedLinks = linkedSetOf<String>()
 
                 val packedHtml = text.substringAfter("= `", "").substringBefore("`;", "")
@@ -466,7 +479,7 @@ class AnimeSailProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ) {
         val normalizedUrl = normalizeYourUploadUrl(url)
-        if (isCustomManagedHost(normalizedUrl)) {
+        if (isCustomManagedHost(normalizedUrl) || isCustomManagedServer(serverName)) {
             tryCustomLocalExtractor(normalizedUrl, serverName, quality, referer, callback)
             return
         }
@@ -514,6 +527,11 @@ class AnimeSailProvider : MainAPI() {
             lower.contains("myvidplay.com")
     }
 
+    private fun isCustomManagedServer(serverName: String): Boolean {
+        val lower = serverName.lowercase()
+        return lower.contains("pompom") || lower.contains("pancal")
+    }
+
     private suspend fun tryCustomLocalExtractor(
         url: String,
         serverName: String,
@@ -524,7 +542,8 @@ class AnimeSailProvider : MainAPI() {
         val lower = url.lowercase()
         return when {
             lower.contains("myvidplay.com") -> {
-                tryMyVidPlayDirect(url, serverName, quality, referer, callback)
+                tryPassMd5PatternDirect(url, serverName, quality, referer, callback) ||
+                    tryMirrorCrawlerExtractor(url, serverName, quality, referer, callback)
             }
             lower.contains("pixeldrain.com") -> {
                 tryPixeldrainDirect(url, serverName, quality, callback) ||
@@ -534,7 +553,12 @@ class AnimeSailProvider : MainAPI() {
                 tryMirrorCrawlerExtractor(normalizeYourUploadUrl(url), serverName, quality, referer, callback)
             }
             lower.contains("pompom") || lower.contains("pancal") -> {
-                tryMirrorCrawlerExtractor(url, serverName, quality, referer, callback)
+                tryPassMd5PatternDirect(url, serverName, quality, referer, callback) ||
+                    tryMirrorCrawlerExtractor(url, serverName, quality, referer, callback)
+            }
+            isCustomManagedServer(serverName) -> {
+                tryPassMd5PatternDirect(url, serverName, quality, referer, callback) ||
+                    tryMirrorCrawlerExtractor(url, serverName, quality, referer, callback)
             }
             else -> false
         }
@@ -590,26 +614,19 @@ class AnimeSailProvider : MainAPI() {
         return true
     }
 
-    private suspend fun tryMyVidPlayDirect(
+    private suspend fun tryPassMd5PatternDirect(
         url: String,
         serverName: String,
         quality: Int?,
         referer: String?,
-        callback: (ExtractorLink) -> Unit
+        callback: (ExtractorLink) -> Unit,
+        prefetchedPageText: String? = null
     ): Boolean {
         val pageUrl = normalizeUrlFromBase(url, referer ?: mainUrl) ?: return false
-        val pageResponse = runCatching {
-            app.get(
-                pageUrl,
-                referer = referer ?: mainUrl,
-                headers = mapOf(
-                    "User-Agent" to USER_AGENT,
-                    "Referer" to (referer ?: mainUrl)
-                )
-            )
+        val pageText = prefetchedPageText ?: runCatching {
+            request(pageUrl, ref = referer ?: mainUrl).text
         }.getOrNull() ?: return false
 
-        val pageText = pageResponse.text
         val passPath = Regex("""/pass_md5/[^"'\\s<]+""", RegexOption.IGNORE_CASE)
             .find(pageText)
             ?.value
@@ -624,16 +641,7 @@ class AnimeSailProvider : MainAPI() {
                 ?.getOrNull(1)
             ?: return false
 
-        val passResponse = runCatching {
-            app.get(
-                passUrl,
-                referer = pageUrl,
-                headers = mapOf(
-                    "User-Agent" to USER_AGENT,
-                    "Referer" to pageUrl
-                )
-            )
-        }.getOrNull() ?: return false
+        val passResponse = runCatching { request(passUrl, ref = pageUrl) }.getOrNull() ?: return false
 
         val baseStream = passResponse.text
             .lineSequence()
@@ -641,10 +649,11 @@ class AnimeSailProvider : MainAPI() {
             .firstOrNull { it.startsWith("http://", true) || it.startsWith("https://", true) }
             ?: return false
 
+        val resolvedBaseStream = normalizeUrlFromBase(baseStream, pageUrl) ?: return false
         val randomPad = randomAlphaNum(10)
         val expiry = System.currentTimeMillis()
-        val separator = if (baseStream.contains("?")) "&" else "?"
-        val finalUrl = "${baseStream}${randomPad}${separator}token=$token&expiry=$expiry"
+        val separator = if (resolvedBaseStream.contains("?")) "&" else "?"
+        val finalUrl = "${resolvedBaseStream}${randomPad}${separator}token=$token&expiry=$expiry"
 
         val probe = runCatching {
             app.get(
