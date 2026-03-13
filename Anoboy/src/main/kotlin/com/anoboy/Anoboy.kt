@@ -368,7 +368,7 @@ class Anoboy : MainAPI() {
 
                 val rawTitle = anchor.text().trim()
                 val episodeNumber = when {
-                    shouldCollapseToSingleEpisode -> episodeNumberFromUrl ?: (index + 1)
+                    shouldCollapseToSingleEpisode -> episodeNumberFromUrl
                     else -> parseEpisodeNumber(rawTitle, dataVideo)
                         ?: if (isQualityOnlyLabel(rawTitle) && episodeNumberFromUrl != null && fallbackAnchors.size <= 6) {
                             episodeNumberFromUrl
@@ -497,7 +497,11 @@ class Anoboy : MainAPI() {
 
         fun resolveUrl(raw: String?, base: String): String? {
             if (!isValidUrl(raw)) return null
-            val clean = raw!!.trim()
+            var clean = raw!!.trim()
+            // Some legacy Anoboy acbatch pages output broken query values where '+' becomes ' '.
+            if (clean.contains("/uploads/stream/", true) && clean.contains("data=", true)) {
+                clean = clean.replace(" ", "+")
+            }
             return try {
                 when {
                     clean.startsWith("http://", true) || clean.startsWith("https://", true) -> clean
@@ -525,6 +529,15 @@ class Anoboy : MainAPI() {
             doc.select("a[href*=\"yourupload.com/embed/\"], a[href*=\"yourupload.com/watch/\"], a[href*=\"www.yourupload.com/embed/\"], a[href*=\"www.yourupload.com/watch/\"]")
                 .forEach { queueUrl(it.attr("href"), baseUrl) }
 
+            doc.select(
+                "a[href*=\"/uploads/stream/embed.php\"], " +
+                    "a[href*=\"/uploads/acbatch.php\"], " +
+                    "a[href*=\"/uploads/adsbatch\"], " +
+                    "a[href*=\"/uploads/yupbatch\"], " +
+                    "a[href*=\"blogger.com/video.g\"], " +
+                    "a[href*=\"blogger.googleusercontent.com\"]"
+            ).forEach { queueUrl(it.attr("href"), baseUrl) }
+
             doc.select("#fplay a#allmiror[data-video], #fplay a[data-video], a#allmiror[data-video], a[data-video], [data-video]")
                 .forEach { anchor ->
                     queueUrl(anchor.attr("data-video"), baseUrl)
@@ -543,7 +556,7 @@ class Anoboy : MainAPI() {
                 .forEach { queueUrl(it.attr("href"), baseUrl) }
 
             val bloggerRegex = Regex("""https?://(?:www\.)?blogger\.com/video\.g\?[^"'<\s]+""", RegexOption.IGNORE_CASE)
-            val batchRegex = Regex("""/uploads/(?:adsbatch[^"'\s]+|yupbatch[^"'\s]+)""", RegexOption.IGNORE_CASE)
+            val batchRegex = Regex("""/uploads/(?:adsbatch[^"'\s]+|yupbatch[^"'\s]+|acbatch[^"'\s]+|stream/embed\.php\?[^"'\s]+)""", RegexOption.IGNORE_CASE)
             val yourUploadRegex = Regex("""https?://(?:www\.)?yourupload\.com/(?:embed|watch)/[^"'<\s]+""", RegexOption.IGNORE_CASE)
             doc.select("script").forEach { script ->
                 val scriptData = script.data()

@@ -47,11 +47,11 @@ class BloggerExtractor : ExtractorApi() {
         val page = app.get(fixedUrl, referer = referer ?: "$mainUrl/")
         val html = page.text
 
-        val fSid = Regex("FdrFJe\":\"(\\d+)\"")
+        val fSid = Regex("FdrFJe\":\"(-?\\d+)\"")
             .find(html)
             ?.groupValues
             ?.getOrNull(1)
-            ?: return
+            ?: ""
         val bl = Regex("cfb2h\":\"([^\"]+)\"")
             .find(html)
             ?.groupValues
