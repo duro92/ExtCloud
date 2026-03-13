@@ -24,6 +24,7 @@ import okhttp3.Interceptor
 import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
+import java.net.URLDecoder
 
 class AnimeSailProvider : MainAPI() {
     override var mainUrl = "https://154.26.137.28"
@@ -171,16 +172,10 @@ class AnimeSailProvider : MainAPI() {
     ): Boolean {
         val document = request(data).document
         val playerPath = "$mainUrl/utils/player/"
+        val visitedUrls = linkedSetOf<String>()
 
-        document.select(".mobius > .mirror > option").amap { element ->
+        document.select(".mobius > .mirror > option, .mobius option, select.mirror option").amap { element ->
             safeApiCall {
-                val encodedData = element.attr("data-em")
-                if (encodedData.isBlank()) return@safeApiCall
-
-                val iframeSrc = decodeIframeFromDataEm(encodedData) ?: return@safeApiCall
-                val iframe = fixUrl(iframeSrc)
-                if (iframe.contains("statistic") || iframe.isBlank()) return@safeApiCall
-
                 val rawText = element.text().trim()
                 val quality = getIndexQuality(rawText)
 
@@ -188,101 +183,19 @@ class AnimeSailProvider : MainAPI() {
                     if (it.isLowerCase()) it.titlecase() else it.toString()
                 } ?: name
 
-                when {
-                    iframe.endsWith(".mp4", ignoreCase = true) || iframe.endsWith(".m3u8", ignoreCase = true) -> {
-                        val isMp4UploadDirect = iframe.contains("mp4upload.com", ignoreCase = true)
-                        val directReferer = if (isMp4UploadDirect) "https://www.mp4upload.com/" else mainUrl
-                        val directHeaders = if (isMp4UploadDirect) {
-                            mapOf(
-                                "User-Agent" to USER_AGENT,
-                                "Referer" to directReferer,
-                                "Origin" to "https://www.mp4upload.com"
-                            )
-                        } else {
-                            emptyMap()
-                        }
-
-                        callback.invoke(
-                            newExtractorLink(
-                                source = serverName,
-                                name = serverName,
-                                url = iframe,
-                                type = if (iframe.endsWith(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                referer = directReferer
-                                this.quality = quality
-                                this.headers = directHeaders
-                            }
-                        )
-                    }
-
-                    iframe.contains("${playerPath}popup") -> {
-                        val encodedUrl = iframe.substringAfter("url=").substringBefore("&")
-                        if (encodedUrl.isNotBlank()) {
-                            val realUrl = java.net.URLDecoder.decode(encodedUrl, "UTF-8")
-                            loadFixedExtractor(realUrl, serverName, quality, mainUrl, subtitleCallback, callback)
-                        }
-                    }
-
-                    iframe.contains("player-kodir.aghanim.xyz") || iframe.contains("${playerPath}kodir2") -> {
-                        val res = request(iframe, ref = data).text
-                        var link = Jsoup.parse(res.substringAfter("= `", "").substringBefore("`;", ""))
-                            .select("source").last()?.attr("src")
-
-                        if (link.isNullOrBlank()) {
-                            link = Jsoup.parse(res).select("source").attr("src")
-                        }
-
-                        if (!link.isNullOrBlank()) {
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = serverName,
-                                    name = serverName,
-                                    url = link,
-                                    type = INFER_TYPE
-                                ) {
-                                    referer = iframe
-                                    this.quality = quality
-                                }
-                            )
-                        }
-                    }
-
-                    iframe.contains("${playerPath}framezilla") || iframe.contains("uservideo.xyz") -> {
-                        val doc = request(iframe, ref = data).document
-                        val innerLink = doc.select("iframe").attr("src")
-                        if (innerLink.isNotBlank()) {
-                            loadFixedExtractor(fixUrl(innerLink), serverName, quality, mainUrl, subtitleCallback, callback)
-                        }
-                    }
-
-                    iframe.contains("aghanim.xyz/tools/redirect/") -> {
-                        val id = iframe.substringAfter("id=").substringBefore("&token")
-                        val link = "https://rasa-cintaku-semakin-berantai.xyz/v/$id"
-                        loadFixedExtractor(link, serverName, quality, mainUrl, subtitleCallback, callback)
-                    }
-
-                    iframe.contains(playerPath) -> {
-                        val doc = request(iframe, ref = data).document
-                        val link = doc.select("source").attr("src")
-                        if (link.isNotBlank()) {
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = serverName,
-                                    name = serverName,
-                                    url = link,
-                                    type = INFER_TYPE
-                                ) {
-                                    referer = iframe
-                                    this.quality = quality
-                                }
-                            )
-                        }
-                    }
-
-                    else -> {
-                        loadFixedExtractor(iframe, serverName, quality, mainUrl, subtitleCallback, callback)
-                    }
+                val candidates = element.extractMirrorCandidates()
+                if (candidates.isEmpty()) return@safeApiCall
+                candidates.forEach { candidate ->
+                    resolveMirrorLink(
+                        rawUrl = candidate,
+                        referer = data,
+                        playerPath = playerPath,
+                        serverName = serverName,
+                        quality = quality,
+                        visitedUrls = visitedUrls,
+                        subtitleCallback = subtitleCallback,
+                        callback = callback
+                    )
                 }
             }
         }
@@ -290,9 +203,242 @@ class AnimeSailProvider : MainAPI() {
         return true
     }
 
-    private fun decodeIframeFromDataEm(encodedData: String): String? {
-        val decoded = runCatching { base64Decode(encodedData.trim()) }.getOrNull() ?: return null
-        return Jsoup.parse(decoded).selectFirst("iframe")?.attr("src")?.trim()?.takeIf { it.isNotBlank() }
+    private suspend fun resolveMirrorLink(
+        rawUrl: String,
+        referer: String,
+        playerPath: String,
+        serverName: String,
+        quality: Int?,
+        visitedUrls: MutableSet<String>,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val normalized = normalizeMirrorUrl(rawUrl) ?: return
+        if (normalized.contains("statistic", true)) return
+        if (!visitedUrls.add(normalized)) return
+
+        when {
+            isDirectMediaUrl(normalized) -> {
+                emitDirectMediaLink(normalized, serverName, quality, referer, callback)
+            }
+
+            normalized.contains("${playerPath}popup", true) -> {
+                val encodedUrl = normalized.substringAfter("url=", "").substringBefore("&")
+                if (encodedUrl.isBlank()) return
+                val realUrl = runCatching { URLDecoder.decode(encodedUrl, "UTF-8") }.getOrNull() ?: return
+                resolveMirrorLink(
+                    rawUrl = realUrl,
+                    referer = normalized,
+                    playerPath = playerPath,
+                    serverName = serverName,
+                    quality = quality,
+                    visitedUrls = visitedUrls,
+                    subtitleCallback = subtitleCallback,
+                    callback = callback
+                )
+            }
+
+            normalized.contains("aghanim.xyz/tools/redirect/", true) -> {
+                val id = normalized.substringAfter("id=").substringBefore("&token")
+                if (id.isBlank()) return
+                resolveMirrorLink(
+                    rawUrl = "https://rasa-cintaku-semakin-berantai.xyz/v/$id",
+                    referer = normalized,
+                    playerPath = playerPath,
+                    serverName = serverName,
+                    quality = quality,
+                    visitedUrls = visitedUrls,
+                    subtitleCallback = subtitleCallback,
+                    callback = callback
+                )
+            }
+
+            normalized.contains("player-kodir.aghanim.xyz", true) ||
+                normalized.contains("${playerPath}kodir2", true) ||
+                normalized.contains("${playerPath}framezilla", true) ||
+                normalized.contains("uservideo.xyz", true) ||
+                normalized.contains(playerPath, true) -> {
+                val response = request(normalized, ref = referer)
+                val text = response.text
+                val playerDoc = response.document
+                val nestedLinks = linkedSetOf<String>()
+
+                val packedHtml = text.substringAfter("= `", "").substringBefore("`;", "")
+                if (packedHtml.isNotBlank()) {
+                    nestedLinks.addAll(
+                        Jsoup.parse(packedHtml)
+                            .select("source[src], video[src], iframe[src], a[href]")
+                            .mapNotNull { it.attr("src").ifBlank { it.attr("href") }.trim().takeIf(String::isNotBlank) }
+                    )
+                }
+
+                nestedLinks.addAll(
+                    playerDoc.select("source[src], video[src], iframe[src], a[href]")
+                        .mapNotNull { it.attr("src").ifBlank { it.attr("href") }.trim().takeIf(String::isNotBlank) }
+                )
+
+                Regex("""https?://[^\s"'<>]+""", RegexOption.IGNORE_CASE)
+                    .findAll(text)
+                    .map { it.value.trim() }
+                    .filter { shouldFollowNestedLink(it, playerPath) }
+                    .forEach { nestedLinks.add(it) }
+
+                if (nestedLinks.isEmpty()) {
+                    loadFixedExtractor(
+                        url = normalized,
+                        serverName = serverName,
+                        quality = quality,
+                        referer = referer,
+                        subtitleCallback = subtitleCallback,
+                        callback = callback
+                    )
+                    return
+                }
+
+                nestedLinks.forEach { nested ->
+                    resolveMirrorLink(
+                        rawUrl = nested,
+                        referer = normalized,
+                        playerPath = playerPath,
+                        serverName = serverName,
+                        quality = quality,
+                        visitedUrls = visitedUrls,
+                        subtitleCallback = subtitleCallback,
+                        callback = callback
+                    )
+                }
+            }
+
+            else -> {
+                loadFixedExtractor(
+                    url = normalized,
+                    serverName = serverName,
+                    quality = quality,
+                    referer = referer,
+                    subtitleCallback = subtitleCallback,
+                    callback = callback
+                )
+            }
+        }
+    }
+
+    private fun Element.extractMirrorCandidates(): List<String> {
+        val rawCandidates = listOf(
+            attr("data-em"),
+            attr("value"),
+            attr("data-iframe"),
+            attr("data-url"),
+            attr("data-src")
+        ).filter { it.isNotBlank() }
+
+        val results = linkedSetOf<String>()
+        rawCandidates.forEach { encoded ->
+            results.addAll(decodeMirrorCandidates(encoded))
+        }
+        return results.toList()
+    }
+
+    private fun decodeMirrorCandidates(encodedData: String): List<String> {
+        if (encodedData.isBlank()) return emptyList()
+        val candidates = linkedSetOf<String>()
+        val clean = encodedData.trim().replace("\\u0026", "&")
+
+        fun addUrl(raw: String?) {
+            normalizeMirrorUrl(raw)?.let { candidates.add(it) }
+        }
+
+        fun parseBlob(blob: String) {
+            if (blob.isBlank()) return
+            addUrl(blob)
+            val doc = Jsoup.parse(blob)
+            doc.select("iframe[src], source[src], video[src], a[href]").forEach { el ->
+                addUrl(el.attr("src").ifBlank { el.attr("href") })
+            }
+            Regex("""https?://[^\s"'<>]+""", RegexOption.IGNORE_CASE)
+                .findAll(blob)
+                .forEach { addUrl(it.value) }
+        }
+
+        parseBlob(clean)
+        runCatching { URLDecoder.decode(clean, "UTF-8") }.getOrNull()?.let(::parseBlob)
+        runCatching { base64Decode(clean.replace("\\s".toRegex(), "")) }.getOrNull()?.let(::parseBlob)
+        return candidates.toList()
+    }
+
+    private fun normalizeMirrorUrl(raw: String?): String? {
+        val clean = raw?.trim()
+            ?.removePrefix("\"")
+            ?.removeSuffix("\"")
+            ?.removePrefix("'")
+            ?.removeSuffix("'")
+            ?.replace("\\/", "/")
+            ?.replace("&amp;", "&")
+            ?.trim()
+            ?: return null
+        if (clean.isBlank()) return null
+        return when {
+            clean.startsWith("http://", true) || clean.startsWith("https://", true) -> clean
+            clean.startsWith("//") -> "https:$clean"
+            clean.startsWith("/") -> fixUrl(clean)
+            else -> null
+        }
+    }
+
+    private fun shouldFollowNestedLink(url: String, playerPath: String): Boolean {
+        val lower = url.lowercase()
+        if (isDirectMediaUrl(lower)) return true
+        if (lower.contains(playerPath.lowercase())) return true
+        val hostHints = listOf(
+            "yourupload",
+            "pixeldrain",
+            "pompom",
+            "pancal",
+            "mixdrop",
+            "mp4upload",
+            "uservideo",
+            "aghanim"
+        )
+        return hostHints.any { lower.contains(it) }
+    }
+
+    private fun isDirectMediaUrl(url: String): Boolean {
+        return Regex("""(?i)\.(m3u8|mp4)(?:$|[?#&])""").containsMatchIn(url)
+    }
+
+    private suspend fun emitDirectMediaLink(
+        mediaUrl: String,
+        serverName: String,
+        quality: Int?,
+        refererHint: String?,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val isMp4UploadDirect = mediaUrl.contains("mp4upload.com", ignoreCase = true)
+        val directReferer = if (isMp4UploadDirect) "https://www.mp4upload.com/" else (refererHint ?: mainUrl)
+        val directHeaders = if (isMp4UploadDirect) {
+            mapOf(
+                "User-Agent" to USER_AGENT,
+                "Referer" to directReferer,
+                "Origin" to "https://www.mp4upload.com"
+            )
+        } else {
+            mapOf(
+                "User-Agent" to USER_AGENT,
+                "Referer" to directReferer
+            )
+        }
+
+        callback.invoke(
+            newExtractorLink(
+                source = serverName,
+                name = serverName,
+                url = mediaUrl,
+                type = if (mediaUrl.contains(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+            ) {
+                referer = directReferer
+                this.quality = quality ?: Qualities.Unknown.value
+                this.headers = directHeaders
+            }
+        )
     }
 
     private suspend fun loadFixedExtractor(
@@ -303,9 +449,10 @@ class AnimeSailProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        if (tryLoadMp4UploadDirect(url, serverName, quality, callback)) return
+        val normalizedUrl = normalizeYourUploadUrl(url)
+        if (tryLoadMp4UploadDirect(normalizedUrl, serverName, quality, callback)) return
 
-        loadExtractor(url, referer, subtitleCallback) { link ->
+        loadExtractor(normalizedUrl, referer, subtitleCallback) { link ->
             val finalName =
                 if (serverName.equals(link.name, ignoreCase = true)) link.name else "$serverName - ${link.name}"
 
@@ -326,6 +473,15 @@ class AnimeSailProvider : MainAPI() {
                     }
                 )
             }
+        }
+    }
+
+    private fun normalizeYourUploadUrl(url: String): String {
+        if (!url.contains("yourupload.com", true)) return url
+        return if (url.contains("/watch/", true)) {
+            url.replace("/watch/", "/embed/", true)
+        } else {
+            url
         }
     }
 
