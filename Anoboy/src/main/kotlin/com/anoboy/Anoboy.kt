@@ -805,9 +805,18 @@ class Anoboy : MainAPI() {
                 ?.getOrNull(1)
                 ?: return false
 
-            val html = runCatching {
-                app.get(fixedUrl, referer = referer ?: "$mainUrl/").text
+            val page = runCatching {
+                app.get(
+                    fixedUrl,
+                    referer = referer ?: "$mainUrl/",
+                    headers = mapOf(
+                        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "User-Agent" to USER_AGENT
+                    )
+                )
             }.getOrNull() ?: return false
+            val html = page.text
+            val cookies = page.cookies
 
             val fSid = Regex("FdrFJe\":\"(-?\\d+)\"")
                 .find(html)
@@ -836,9 +845,12 @@ class Anoboy : MainAPI() {
                     apiUrl,
                     data = mapOf("f.req" to payload),
                     referer = fixedUrl,
+                    cookies = cookies,
                     headers = mapOf(
                         "Origin" to "https://www.blogger.com",
+                        "Accept" to "*/*",
                         "Content-Type" to "application/x-www-form-urlencoded;charset=UTF-8",
+                        "X-Same-Domain" to "1",
                         "User-Agent" to USER_AGENT
                     )
                 ).text

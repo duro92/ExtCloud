@@ -68,8 +68,16 @@ class BloggerExtractor : ExtractorApi() {
             ?.getOrNull(1)
             ?: return emptyList()
 
-        val page = app.get(fixedUrl, referer = referer ?: "$mainUrl/")
+        val page = app.get(
+            fixedUrl,
+            referer = referer ?: "$mainUrl/",
+            headers = mapOf(
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "User-Agent" to USER_AGENT
+            )
+        )
         val html = page.text
+        val cookies = page.cookies
 
         val fSid = Regex("FdrFJe\":\"(-?\\d+)\"")
             .find(html)
@@ -97,9 +105,12 @@ class BloggerExtractor : ExtractorApi() {
             apiUrl,
             data = mapOf("f.req" to payload),
             referer = fixedUrl,
+            cookies = cookies,
             headers = mapOf(
                 "Origin" to mainUrl,
+                "Accept" to "*/*",
                 "Content-Type" to "application/x-www-form-urlencoded;charset=UTF-8",
+                "X-Same-Domain" to "1",
                 "User-Agent" to USER_AGENT
             )
         ).text
