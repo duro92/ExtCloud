@@ -744,6 +744,139 @@ class Anoboy : MainAPI() {
         }
         val bloggerExtractor = BloggerExtractor()
 
+        fun decodeUnicodeEscapes(input: String): String {
+            val unicodeRegex = Regex("""\\u([0-9a-fA-F]{4})""")
+            var output = input
+            repeat(2) {
+                output = unicodeRegex.replace(output) { match ->
+                    match.groupValues[1].toInt(16).toChar().toString()
+                }
+            }
+            output = output.replace("\\/", "/")
+            output = output.replace("\\=", "=")
+            output = output.replace("\\&", "&")
+            output = output.replace("\\\\", "\\")
+            output = output.replace("\\\"", "\"")
+            return output
+        }
+
+        fun normalizeVideoUrl(input: String): String {
+            return decodeUnicodeEscapes(input)
+                .replace("\\u003d", "=")
+                .replace("\\u0026", "&")
+                .replace("\\u002F", "/")
+                .replace("\\/", "/")
+                .replace("\\", "")
+        }
+
+        fun itagToQuality(itag: Int?): Int {
+            return when (itag) {
+                18 -> Qualities.P360.value
+                22 -> Qualities.P720.value
+                37 -> Qualities.P1080.value
+                59 -> Qualities.P480.value
+                43 -> Qualities.P360.value
+                36 -> Qualities.P240.value
+                17 -> Qualities.P144.value
+                137 -> Qualities.P1080.value
+                136 -> Qualities.P720.value
+                135 -> Qualities.P480.value
+                134 -> Qualities.P360.value
+                133 -> Qualities.P240.value
+                160 -> Qualities.P144.value
+                else -> Qualities.Unknown.value
+            }
+        }
+
+        suspend fun emitBloggerDirectLinks(bloggerUrl: String, referer: String?): Boolean {
+            val fixedUrl = if (bloggerUrl.startsWith("//")) "https:$bloggerUrl" else bloggerUrl
+            if (fixedUrl.contains("blogger.googleusercontent.com", true)) {
+                callbackWrapper(
+                    newExtractorLink("Blogger", "Blogger", fixedUrl, INFER_TYPE) {
+                        this.referer = referer ?: fixedUrl
+                    }
+                )
+                return true
+            }
+
+            val token = Regex("[?&]token=([^&]+)")
+                .find(fixedUrl)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?: return false
+
+            val html = runCatching {
+                app.get(fixedUrl, referer = referer ?: "$mainUrl/").text
+            }.getOrNull() ?: return false
+
+            val fSid = Regex("FdrFJe\":\"(-?\\d+)\"")
+                .find(html)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?: ""
+            val bl = Regex("cfb2h\":\"([^\"]+)\"")
+                .find(html)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?: return false
+            val hl = Regex("lang=\"([^\"]+)\"")
+                .find(html)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.ifBlank { null }
+                ?: "en-US"
+            val reqId = (10000..99999).random()
+            val rpcId = "WcwnYd"
+            val payload = """[[["$rpcId","[\"$token\",\"\",0]",null,"generic"]]]"""
+            val apiUrl = "https://www.blogger.com/_/BloggerVideoPlayerUi/data/batchexecute" +
+                "?rpcids=$rpcId&source-path=%2Fvideo.g&f.sid=$fSid&bl=$bl&hl=$hl&_reqid=$reqId&rt=c"
+
+            val response = runCatching {
+                app.post(
+                    apiUrl,
+                    data = mapOf("f.req" to payload),
+                    referer = fixedUrl,
+                    headers = mapOf(
+                        "Origin" to "https://www.blogger.com",
+                        "Content-Type" to "application/x-www-form-urlencoded;charset=UTF-8",
+                        "User-Agent" to USER_AGENT
+                    )
+                ).text
+            }.getOrNull() ?: return false
+
+            val directUrls = Regex("""https://[^\s"']+""")
+                .findAll(decodeUnicodeEscapes(response))
+                .map { it.value }
+                .plus(
+                    Regex("""https://[^\s"']+""")
+                        .findAll(response)
+                        .map { it.value }
+                )
+                .map { normalizeVideoUrl(it) }
+                .filter {
+                    it.contains("googlevideo.com/videoplayback") ||
+                        it.contains("blogger.googleusercontent.com")
+                }
+                .distinct()
+                .toList()
+
+            directUrls.forEach { videoUrl ->
+                val itag = Regex("[?&]itag=(\\d+)")
+                    .find(videoUrl)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    ?.toIntOrNull()
+                callbackWrapper(
+                    newExtractorLink("Blogger", "Blogger", videoUrl, INFER_TYPE) {
+                        this.referer = fixedUrl
+                        this.quality = itagToQuality(itag)
+                    }
+                )
+            }
+
+            return directUrls.isNotEmpty()
+        }
+
         suspend fun resolveLegacyMirrorPage(pageUrl: String): Boolean {
             val lower = pageUrl.lowercase()
             val isLegacyMirrorPage = lower.contains("/uploads/adsbatch") ||
@@ -787,24 +920,7 @@ class Anoboy : MainAPI() {
                 when {
                     candidate.contains("blogger.com/video.g", true) ||
                         candidate.contains("blogger.googleusercontent.com", true) -> {
-                        val directVideos = runCatching {
-                            bloggerExtractor.extractDirectVideos(candidate, pageUrl)
-                        }.getOrElse { emptyList() }
-
-                        directVideos.forEach { video ->
-                            callbackWrapper(
-                                newExtractorLink(
-                                    bloggerExtractor.name,
-                                    bloggerExtractor.name,
-                                    video.url,
-                                    INFER_TYPE
-                                ) {
-                                    referer = candidate
-                                    quality = video.quality
-                                }
-                            )
-                            resolvedAny = true
-                        }
+                        if (emitBloggerDirectLinks(candidate, pageUrl)) resolvedAny = true
                     }
 
                     candidate != pageUrl -> {
@@ -829,25 +945,7 @@ class Anoboy : MainAPI() {
 
         // Try Blogger first, then continue with all other mirrors so users can switch sources.
         bloggerLinks.distinct().forEach { link ->
-            val directVideos = runCatching {
-                bloggerExtractor.extractDirectVideos(link, requestReferer)
-            }.getOrElse { emptyList() }
-
-            if (directVideos.isNotEmpty()) {
-                directVideos.forEach { video ->
-                    callbackWrapper(
-                        newExtractorLink(
-                            bloggerExtractor.name,
-                            bloggerExtractor.name,
-                            video.url,
-                            INFER_TYPE
-                        ) {
-                            referer = link
-                            quality = video.quality
-                        }
-                    )
-                }
-            } else {
+            if (!emitBloggerDirectLinks(link, requestReferer)) {
                 bloggerExtractor.getUrl(link, requestReferer, subtitleCallback, callbackWrapper)
             }
         }
