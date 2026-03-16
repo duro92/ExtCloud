@@ -589,6 +589,7 @@ class Anoboy : MainAPI() {
         val discoveredUrls = linkedSetOf<String>()
         val queuedUrls = ArrayDeque<String>()
         val crawledUrls = mutableSetOf<String>()
+        val seedUrls = mutableListOf<String>()
 
         fun isValidUrl(raw: String?): Boolean {
             val clean = raw?.trim().orEmpty()
@@ -622,6 +623,7 @@ class Anoboy : MainAPI() {
 
         fun queueUrl(raw: String?, base: String) {
             val resolved = resolveUrl(raw, base) ?: return
+            seedUrls.add(resolved)
             if (discoveredUrls.add(resolved)) queuedUrls.add(resolved)
         }
 
@@ -813,6 +815,17 @@ class Anoboy : MainAPI() {
 
             return resolvedAny
         }
+
+        seedUrls
+            .distinct()
+            .filter {
+                val lower = it.lowercase()
+                lower.contains("/uploads/adsbatch") ||
+                    lower.contains("/uploads/acbatch") ||
+                    lower.contains("/uploads/yupbatch") ||
+                    lower.contains("/uploads/stream/embed.php")
+            }
+            .forEach { resolveLegacyMirrorPage(it) }
 
         // Try Blogger first, then continue with all other mirrors so users can switch sources.
         bloggerLinks.distinct().forEach { link ->
