@@ -434,8 +434,28 @@ class Anoboy : MainAPI() {
         }
 
         val serverEpisodes = buildServerEpisodes(document)
+        val nestedStreamEpisodes = groupedElements.singleOrNull()?.let { (_, anchor) ->
+            val href = fixUrl(anchor.attr("href"))
+            val rawTitle = anchor.text().trim()
+            val isGenericStreamingPage = href != url &&
+                (rawTitle.contains("streaming", true) || href.contains("streaming", true)) &&
+                parseEpisodeNumber(rawTitle, href) == null
+
+            if (!isGenericStreamingPage) {
+                emptyList()
+            } else {
+                runCatching {
+                    val nestedDocument = app.get(href, referer = url).document
+                    buildServerEpisodes(nestedDocument)
+                }.getOrElse { emptyList() }
+            }
+        } ?: emptyList()
         val useServerEpisodes = seasonHeaders.isEmpty() && serverEpisodes.isNotEmpty() && episodes.size <= 1
-        val finalEpisodes = if (useServerEpisodes) serverEpisodes else episodes
+        val finalEpisodes = when {
+            nestedStreamEpisodes.isNotEmpty() -> nestedStreamEpisodes
+            useServerEpisodes -> serverEpisodes
+            else -> episodes
+        }
 
         val altTitles = listOfNotNull(
             title,
