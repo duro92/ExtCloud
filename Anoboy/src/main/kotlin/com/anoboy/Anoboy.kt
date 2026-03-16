@@ -375,7 +375,15 @@ class Anoboy : MainAPI() {
                 ?.getOrNull(1)
                 ?.toIntOrNull()
 
-        fun buildServerEpisodes(doc: org.jsoup.nodes.Document): List<Episode> {
+        fun encodeEpisodeData(referer: String?, payload: String): String {
+            if (referer.isNullOrBlank()) return payload
+            return "anoboyref::$referer:::$payload"
+        }
+
+        fun buildServerEpisodes(
+            doc: org.jsoup.nodes.Document,
+            pageReferer: String = url
+        ): List<Episode> {
             val serverGroups = doc.select("div.satu, div.dua, div.tiga, div.empat, div.lima, div.enam")
             val anchors = serverGroups.flatMap { group -> group.select("a[data-video]") }
             val fallbackAnchors = if (anchors.isNotEmpty()) anchors else doc.select("a[data-video]")
@@ -426,7 +434,7 @@ class Anoboy : MainAPI() {
                         "multi::" + urls.joinToString("||")
                     }
 
-                    newEpisode(data) {
+                    newEpisode(encodeEpisodeData(pageReferer, data)) {
                         name = title
                         episode = episodeNumber
                     }
@@ -476,7 +484,7 @@ class Anoboy : MainAPI() {
         suspend fun buildNestedEpisodesFromStreamingLink(href: String): List<Episode> {
             val nestedDocument = fetchNestedEpisodePage(href) ?: return emptyList()
 
-            val serverEpisodesFromNested = buildServerEpisodes(nestedDocument)
+            val serverEpisodesFromNested = buildServerEpisodes(nestedDocument, href)
             if (serverEpisodesFromNested.isNotEmpty()) return serverEpisodesFromNested
 
             val nestedEpisodeAnchors = nestedDocument.select("div.singlelink ul.lcp_catlist li a, div.eplister ul li a")
@@ -488,7 +496,7 @@ class Anoboy : MainAPI() {
             }
         }
 
-        val serverEpisodes = buildServerEpisodes(document)
+        val serverEpisodes = buildServerEpisodes(document, url)
         val nestedStreamEpisodes = groupedElements.singleOrNull()?.let { (_, anchor) ->
             val href = fixUrl(anchor.attr("href"))
             val rawTitle = anchor.text().trim()
@@ -582,10 +590,32 @@ class Anoboy : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        val refererPrefix = "anoboyref::"
         val multiPrefix = "multi::"
-        val isMulti = data.startsWith(multiPrefix)
-        val requestReferer = if (isMulti) mainUrl else data
-        val document = if (isMulti) null else app.get(data).document
+        val hasEmbeddedReferer = data.startsWith(refererPrefix)
+        val resolvedData = if (hasEmbeddedReferer) {
+            data.removePrefix(refererPrefix)
+        } else {
+            data
+        }
+        val refererParts = if (hasEmbeddedReferer) {
+            resolvedData.split(":::", limit = 2)
+        } else {
+            emptyList()
+        }
+        val extractedReferer = if (hasEmbeddedReferer && refererParts.size == 2 && refererParts[0].isNotBlank()) {
+            refererParts[0]
+        } else {
+            null
+        }
+        val requestData = if (extractedReferer != null && refererParts.size == 2) {
+            refererParts[1]
+        } else {
+            resolvedData
+        }
+        val isMulti = requestData.startsWith(multiPrefix)
+        val requestReferer = extractedReferer ?: if (isMulti) mainUrl else requestData
+        val document = if (isMulti) null else app.get(requestData, referer = requestReferer).document
         val discoveredUrls = linkedSetOf<String>()
         val queuedUrls = ArrayDeque<String>()
         val crawledUrls = mutableSetOf<String>()
@@ -626,6 +656,20 @@ class Anoboy : MainAPI() {
             val resolved = resolveUrl(raw, base) ?: return
             seedUrls.add(resolved)
             if (discoveredUrls.add(resolved)) queuedUrls.add(resolved)
+        }
+
+        fun isDirectResolvableUrl(url: String): Boolean {
+            val lower = url.lowercase()
+            return lower.contains("blogger.com/video.g") ||
+                lower.contains("blogger.googleusercontent.com") ||
+                lower.contains("/uploads/adsbatch") ||
+                lower.contains("/uploads/acbatch") ||
+                lower.contains("/uploads/yupbatch") ||
+                lower.contains("/uploads/stream/embed.php") ||
+                lower.contains("yourupload.com/embed/") ||
+                lower.contains("yourupload.com/watch/") ||
+                lower.endsWith(".mp4") ||
+                lower.endsWith(".m3u8")
         }
 
         fun extractFromDoc(baseUrl: String, doc: org.jsoup.nodes.Document) {
@@ -688,11 +732,15 @@ class Anoboy : MainAPI() {
                 lower.contains("yupbatch")
         }
 
+        if (!isMulti && isDirectResolvableUrl(requestData)) {
+            queueUrl(requestData, requestReferer)
+        }
+
         if (document != null) {
-            extractFromDoc(data, document)
+            extractFromDoc(requestData, document)
         }
         if (isMulti) {
-            data.removePrefix(multiPrefix)
+            requestData.removePrefix(multiPrefix)
                 .split("||")
                 .map { it.trim() }
                 .filter { it.isNotBlank() }
