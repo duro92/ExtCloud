@@ -742,6 +742,78 @@ class Anoboy : MainAPI() {
         }
         val bloggerExtractor = BloggerExtractor()
 
+        suspend fun resolveLegacyMirrorPage(pageUrl: String): Boolean {
+            val lower = pageUrl.lowercase()
+            val isLegacyMirrorPage = lower.contains("/uploads/adsbatch") ||
+                lower.contains("/uploads/acbatch") ||
+                lower.contains("/uploads/yupbatch") ||
+                lower.contains("/uploads/stream/embed.php")
+            if (!isLegacyMirrorPage) return false
+
+            val doc = runCatching {
+                app.get(pageUrl, referer = requestReferer).document
+            }.getOrNull() ?: return false
+
+            val resolvedCandidates = linkedSetOf<String>()
+            fun addCandidate(raw: String?) {
+                val resolved = resolveUrl(raw, pageUrl) ?: return
+                resolvedCandidates.add(resolved)
+            }
+
+            doc.select("iframe[src], iframe[data-src], iframe[data-litespeed-src]")
+                .forEach { addCandidate(it.getIframeAttr()) }
+            doc.select("a[href], [data-video], [data-src], [data-url], [data-iframe], [data-embed]")
+                .forEach { el ->
+                    addCandidate(el.attr("href"))
+                    addCandidate(el.attr("data-video"))
+                    addCandidate(el.attr("data-src"))
+                    addCandidate(el.attr("data-url"))
+                    addCandidate(el.attr("data-iframe"))
+                    addCandidate(el.attr("data-embed"))
+                }
+
+            val bloggerRegex = Regex("""https?://(?:www\.)?blogger\.com/video\.g\?[^"'<\s]+""", RegexOption.IGNORE_CASE)
+            val fileRegex = Regex("""https?://[^\s"'<>]+""", RegexOption.IGNORE_CASE)
+            doc.select("script").forEach { script ->
+                val scriptData = script.data()
+                bloggerRegex.findAll(scriptData).forEach { addCandidate(it.value) }
+                fileRegex.findAll(scriptData).forEach { addCandidate(it.value) }
+            }
+
+            var resolvedAny = false
+            resolvedCandidates.forEach { candidate ->
+                when {
+                    candidate.contains("blogger.com/video.g", true) ||
+                        candidate.contains("blogger.googleusercontent.com", true) -> {
+                        val directVideos = runCatching {
+                            bloggerExtractor.extractDirectVideos(candidate, pageUrl)
+                        }.getOrElse { emptyList() }
+
+                        directVideos.forEach { video ->
+                            callbackWrapper(
+                                newExtractorLink(
+                                    bloggerExtractor.name,
+                                    bloggerExtractor.name,
+                                    video.url,
+                                    INFER_TYPE
+                                ) {
+                                    referer = candidate
+                                    quality = video.quality
+                                }
+                            )
+                            resolvedAny = true
+                        }
+                    }
+
+                    candidate != pageUrl -> {
+                        loadExtractor(candidate, pageUrl, subtitleCallback, callbackWrapper)
+                    }
+                }
+            }
+
+            return resolvedAny
+        }
+
         // Try Blogger first, then continue with all other mirrors so users can switch sources.
         bloggerLinks.distinct().forEach { link ->
             val directVideos = runCatching {
@@ -767,7 +839,10 @@ class Anoboy : MainAPI() {
             }
         }
         fallbackLinks.distinct().forEach { link ->
-            loadExtractor(link, requestReferer, subtitleCallback, callbackWrapper)
+            val resolvedLegacy = resolveLegacyMirrorPage(link)
+            if (!resolvedLegacy) {
+                loadExtractor(link, requestReferer, subtitleCallback, callbackWrapper)
+            }
         }
 
         return true
