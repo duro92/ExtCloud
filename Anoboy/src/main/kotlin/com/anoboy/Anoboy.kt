@@ -433,6 +433,61 @@ class Anoboy : MainAPI() {
                 }
         }
 
+        fun buildEpisodesFromAnchors(
+            elements: List<Element>,
+            seasonNum: Int? = null
+        ): List<Episode> {
+            return elements
+                .mapIndexed { index, aTag ->
+                    val href = fixUrl(aTag.attr("href"))
+                    val rawTitle = aTag.text().trim()
+                    val cleanedTitle = normalizeTitle(rawTitle)
+                    val episodeNumber = Regex("Episode\\s*(\\d+)", RegexOption.IGNORE_CASE)
+                        .find(rawTitle)
+                        ?.groupValues
+                        ?.getOrNull(1)
+                        ?.toIntOrNull()
+                        ?: Regex("episode[-\\s]?(\\d+)", RegexOption.IGNORE_CASE)
+                            .find(href)
+                            ?.groupValues
+                            ?.getOrNull(1)
+                            ?.toIntOrNull()
+                        ?: if (seasonNum != null && !rawTitle.contains("Episode", true)) 1 else (index + 1)
+
+                    newEpisode(href) {
+                        name = if (cleanedTitle.isBlank()) "Episode $episodeNumber" else cleanedTitle
+                        episode = episodeNumber
+                        if (seasonNum != null) this.season = seasonNum
+                    }
+                }
+        }
+
+        fun fetchNestedEpisodePage(href: String): org.jsoup.nodes.Document? {
+            val referers = listOf(url, mainUrl, null).distinct()
+            for (referer in referers) {
+                val nested = runCatching {
+                    if (referer != null) app.get(href, referer = referer).document else app.get(href).document
+                }.getOrNull()
+                if (nested != null) return nested
+            }
+            return null
+        }
+
+        fun buildNestedEpisodesFromStreamingLink(href: String): List<Episode> {
+            val nestedDocument = fetchNestedEpisodePage(href) ?: return emptyList()
+
+            val serverEpisodesFromNested = buildServerEpisodes(nestedDocument)
+            if (serverEpisodesFromNested.isNotEmpty()) return serverEpisodesFromNested
+
+            val nestedEpisodeAnchors = nestedDocument.select("div.singlelink ul.lcp_catlist li a, div.eplister ul li a")
+            val filteredNestedAnchors = filterStreamingIfAvailable(nestedEpisodeAnchors.toList())
+            return if (filteredNestedAnchors.isNotEmpty()) {
+                buildEpisodesFromAnchors(filteredNestedAnchors.reversed())
+            } else {
+                emptyList()
+            }
+        }
+
         val serverEpisodes = buildServerEpisodes(document)
         val nestedStreamEpisodes = groupedElements.singleOrNull()?.let { (_, anchor) ->
             val href = fixUrl(anchor.attr("href"))
@@ -444,10 +499,7 @@ class Anoboy : MainAPI() {
             if (!isGenericStreamingPage) {
                 emptyList()
             } else {
-                runCatching {
-                    val nestedDocument = app.get(href, referer = url).document
-                    buildServerEpisodes(nestedDocument)
-                }.getOrElse { emptyList() }
+                buildNestedEpisodesFromStreamingLink(href)
             }
         } ?: emptyList()
         val useServerEpisodes = seasonHeaders.isEmpty() && serverEpisodes.isNotEmpty() && episodes.size <= 1
