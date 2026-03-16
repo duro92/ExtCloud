@@ -584,6 +584,7 @@ class Anoboy : MainAPI() {
     ): Boolean {
         val multiPrefix = "multi::"
         val isMulti = data.startsWith(multiPrefix)
+        val requestReferer = if (isMulti) mainUrl else data
         val document = if (isMulti) null else app.get(data).document
         val discoveredUrls = linkedSetOf<String>()
         val queuedUrls = ArrayDeque<String>()
@@ -700,7 +701,7 @@ class Anoboy : MainAPI() {
             val next = queuedUrls.removeFirst()
             if (!shouldCrawl(next) || !crawledUrls.add(next)) continue
             try {
-                val nestedDoc = app.get(next, referer = data).document
+                val nestedDoc = app.get(next, referer = requestReferer).document
                 extractFromDoc(next, nestedDoc)
             } catch (_: Exception) {
                 // skip dead mirror page
@@ -716,7 +717,7 @@ class Anoboy : MainAPI() {
                 try {
                     val decodedHtml = base64Decode(base64.replace("\\s".toRegex(), ""))
                     Jsoup.parse(decodedHtml).selectFirst("iframe")?.getIframeAttr()?.let { iframe ->
-                        queueUrl(iframe, data)
+                        queueUrl(iframe, requestReferer)
                     }
                 } catch (_: Exception) {
                     // ignore broken base64 mirrors
@@ -742,10 +743,10 @@ class Anoboy : MainAPI() {
 
         // Try Blogger first, then continue with all other mirrors so users can switch sources.
         bloggerLinks.distinct().forEach { link ->
-            loadExtractor(link, data, subtitleCallback, callbackWrapper)
+            BloggerExtractor().getUrl(link, requestReferer, subtitleCallback, callbackWrapper)
         }
         fallbackLinks.distinct().forEach { link ->
-            loadExtractor(link, data, subtitleCallback, callbackWrapper)
+            loadExtractor(link, requestReferer, subtitleCallback, callbackWrapper)
         }
 
         return true
