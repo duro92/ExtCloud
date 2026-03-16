@@ -462,7 +462,7 @@ class Anoboy : MainAPI() {
                 }
         }
 
-        fun fetchNestedEpisodePage(href: String): org.jsoup.nodes.Document? {
+        suspend fun fetchNestedEpisodePage(href: String): org.jsoup.nodes.Document? {
             val referers = listOf(url, mainUrl, null).distinct()
             for (referer in referers) {
                 val nested = runCatching {
@@ -473,7 +473,7 @@ class Anoboy : MainAPI() {
             return null
         }
 
-        fun buildNestedEpisodesFromStreamingLink(href: String): List<Episode> {
+        suspend fun buildNestedEpisodesFromStreamingLink(href: String): List<Episode> {
             val nestedDocument = fetchNestedEpisodePage(href) ?: return emptyList()
 
             val serverEpisodesFromNested = buildServerEpisodes(nestedDocument)
