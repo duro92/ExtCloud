@@ -16,6 +16,11 @@ class BloggerExtractor : ExtractorApi() {
 
     private val rpcId = "WcwnYd"
 
+    data class ResolvedVideo(
+        val url: String,
+        val quality: Int
+    )
+
     override suspend fun getUrl(
         url: String,
         referer: String?,
@@ -23,26 +28,45 @@ class BloggerExtractor : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         val fixedUrl = if (url.startsWith("//")) "https:$url" else url
-
-        if (fixedUrl.contains("blogger.googleusercontent.com", true)) {
+        val resolvedVideos = extractDirectVideos(fixedUrl, referer)
+        for (video in resolvedVideos) {
             callback.invoke(
                 newExtractorLink(
                     this.name,
                     this.name,
-                    fixedUrl,
+                    video.url,
                     INFER_TYPE
                 ) {
-                    this.referer = referer ?: "$mainUrl/"
+                    this.referer = fixedUrl
+                    this.quality = video.quality
                 }
             )
-            return
+        }
+    }
+
+    suspend fun extractDirectVideos(url: String, referer: String?): List<ResolvedVideo> {
+        val fixedUrl = if (url.startsWith("//")) "https:$url" else url
+
+        if (fixedUrl.contains("blogger.googleusercontent.com", true)) {
+            return listOf(
+                ResolvedVideo(
+                    fixedUrl,
+                    itagToQuality(
+                        Regex("[?&]itag=(\\d+)")
+                            .find(fixedUrl)
+                            ?.groupValues
+                            ?.getOrNull(1)
+                            ?.toIntOrNull()
+                    )
+                )
+            )
         }
 
         val token = Regex("[?&]token=([^&]+)")
             .find(fixedUrl)
             ?.groupValues
             ?.getOrNull(1)
-            ?: return
+            ?: return emptyList()
 
         val page = app.get(fixedUrl, referer = referer ?: "$mainUrl/")
         val html = page.text
@@ -56,7 +80,7 @@ class BloggerExtractor : ExtractorApi() {
             .find(html)
             ?.groupValues
             ?.getOrNull(1)
-            ?: return
+            ?: return emptyList()
         val hl = Regex("lang=\"([^\"]+)\"")
             .find(html)
             ?.groupValues
@@ -80,9 +104,8 @@ class BloggerExtractor : ExtractorApi() {
             )
         ).text
 
-        val decoded = decodeUnicodeEscapes(response)
-        val urls = Regex("""https://[^\s"']+""")
-            .findAll(decoded)
+        return Regex("""https://[^\s"']+""")
+            .findAll(decodeUnicodeEscapes(response))
             .map { it.value }
             .plus(
                 Regex("""https://[^\s"']+""")
@@ -95,26 +118,19 @@ class BloggerExtractor : ExtractorApi() {
                     it.contains("blogger.googleusercontent.com")
             }
             .distinct()
-            .toList()
-
-        for (videoUrl in urls) {
-            val itag = Regex("[?&]itag=(\\d+)")
-                .find(videoUrl)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?.toIntOrNull()
-            callback.invoke(
-                newExtractorLink(
-                    this.name,
-                    this.name,
+            .map { videoUrl ->
+                ResolvedVideo(
                     videoUrl,
-                    INFER_TYPE
-                ) {
-                    this.referer = fixedUrl
-                    this.quality = itagToQuality(itag)
-                }
-            )
-        }
+                    itagToQuality(
+                        Regex("[?&]itag=(\\d+)")
+                            .find(videoUrl)
+                            ?.groupValues
+                            ?.getOrNull(1)
+                            ?.toIntOrNull()
+                    )
+                )
+            }
+            .toList()
     }
 
     private fun decodeUnicodeEscapes(input: String): String {

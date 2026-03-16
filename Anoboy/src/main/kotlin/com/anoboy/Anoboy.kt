@@ -740,10 +740,31 @@ class Anoboy : MainAPI() {
             foundLinks++
             callback(link)
         }
+        val bloggerExtractor = BloggerExtractor()
 
         // Try Blogger first, then continue with all other mirrors so users can switch sources.
         bloggerLinks.distinct().forEach { link ->
-            BloggerExtractor().getUrl(link, requestReferer, subtitleCallback, callbackWrapper)
+            val directVideos = runCatching {
+                bloggerExtractor.extractDirectVideos(link, requestReferer)
+            }.getOrElse { emptyList() }
+
+            if (directVideos.isNotEmpty()) {
+                directVideos.forEach { video ->
+                    callbackWrapper(
+                        newExtractorLink(
+                            bloggerExtractor.name,
+                            bloggerExtractor.name,
+                            video.url,
+                            INFER_TYPE
+                        ) {
+                            referer = link
+                            quality = video.quality
+                        }
+                    )
+                }
+            } else {
+                bloggerExtractor.getUrl(link, requestReferer, subtitleCallback, callbackWrapper)
+            }
         }
         fallbackLinks.distinct().forEach { link ->
             loadExtractor(link, requestReferer, subtitleCallback, callbackWrapper)
