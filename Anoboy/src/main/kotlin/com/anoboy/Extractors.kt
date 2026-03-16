@@ -84,6 +84,12 @@ class BloggerExtractor : ExtractorApi() {
         val urls = Regex("""https://[^\s"']+""")
             .findAll(decoded)
             .map { it.value }
+            .plus(
+                Regex("""https://[^\s"']+""")
+                    .findAll(response)
+                    .map { it.value }
+            )
+            .map { normalizeVideoUrl(it) }
             .filter {
                 it.contains("googlevideo.com/videoplayback") ||
                     it.contains("blogger.googleusercontent.com")
@@ -104,7 +110,7 @@ class BloggerExtractor : ExtractorApi() {
                     videoUrl,
                     INFER_TYPE
                 ) {
-                    this.referer = "$mainUrl/"
+                    this.referer = fixedUrl
                     this.quality = itagToQuality(itag)
                 }
             )
@@ -125,6 +131,15 @@ class BloggerExtractor : ExtractorApi() {
         output = output.replace("\\\\", "\\")
         output = output.replace("\\\"", "\"")
         return output
+    }
+
+    private fun normalizeVideoUrl(input: String): String {
+        return decodeUnicodeEscapes(input)
+            .replace("\\u003d", "=")
+            .replace("\\u0026", "&")
+            .replace("\\u002F", "/")
+            .replace("\\/", "/")
+            .replace("\\", "")
     }
 
     private fun itagToQuality(itag: Int?): Int {
