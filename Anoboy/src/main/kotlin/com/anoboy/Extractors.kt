@@ -112,11 +112,16 @@ class BloggerExtractor : ExtractorApi() {
     }
 
     private fun decodeUnicodeEscapes(input: String): String {
-        val unicodeRegex = Regex("""\\\\u([0-9a-fA-F]{4})""")
-        var output = unicodeRegex.replace(input) { match ->
-            match.groupValues[1].toInt(16).toChar().toString()
+        val unicodeRegex = Regex("""\\u([0-9a-fA-F]{4})""")
+        var output = input
+        repeat(2) {
+            output = unicodeRegex.replace(output) { match ->
+                match.groupValues[1].toInt(16).toChar().toString()
+            }
         }
         output = output.replace("\\/", "/")
+        output = output.replace("\\=", "=")
+        output = output.replace("\\&", "&")
         output = output.replace("\\\\", "\\")
         output = output.replace("\\\"", "\"")
         return output
