@@ -13,6 +13,7 @@ class BloggerExtractor : ExtractorApi() {
     override val name = "Blogger"
     override val mainUrl = "https://www.blogger.com"
     override val requiresReferer = true
+    private val googleVideoReferer = "https://youtube.googleapis.com/"
 
     private val rpcId = "WcwnYd"
 
@@ -30,6 +31,11 @@ class BloggerExtractor : ExtractorApi() {
         val fixedUrl = if (url.startsWith("//")) "https:$url" else url
         val resolvedVideos = extractDirectVideos(fixedUrl, referer)
         for (video in resolvedVideos) {
+            val directReferer = if (video.url.contains("googlevideo.com/", true)) {
+                googleVideoReferer
+            } else {
+                fixedUrl
+            }
             callback.invoke(
                 newExtractorLink(
                     this.name,
@@ -37,7 +43,12 @@ class BloggerExtractor : ExtractorApi() {
                     video.url,
                     INFER_TYPE
                 ) {
-                    this.referer = fixedUrl
+                    this.referer = directReferer
+                    this.headers = mapOf(
+                        "Referer" to directReferer,
+                        "User-Agent" to USER_AGENT,
+                        "Accept" to "*/*"
+                    )
                     this.quality = video.quality
                 }
             )

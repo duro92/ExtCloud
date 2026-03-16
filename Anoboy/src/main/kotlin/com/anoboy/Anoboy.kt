@@ -590,6 +590,7 @@ class Anoboy : MainAPI() {
         val queuedUrls = ArrayDeque<String>()
         val crawledUrls = mutableSetOf<String>()
         val seedUrls = mutableListOf<String>()
+        val googleVideoReferer = "https://youtube.googleapis.com/"
 
         fun isValidUrl(raw: String?): Boolean {
             val clean = raw?.trim().orEmpty()
@@ -878,9 +879,19 @@ class Anoboy : MainAPI() {
                     ?.groupValues
                     ?.getOrNull(1)
                     ?.toIntOrNull()
+                val directReferer = if (videoUrl.contains("googlevideo.com/", true)) {
+                    googleVideoReferer
+                } else {
+                    fixedUrl
+                }
                 callbackWrapper(
                     newExtractorLink("Blogger", "Blogger", videoUrl, INFER_TYPE) {
-                        this.referer = fixedUrl
+                        this.referer = directReferer
+                        this.headers = mapOf(
+                            "Referer" to directReferer,
+                            "User-Agent" to USER_AGENT,
+                            "Accept" to "*/*"
+                        )
                         this.quality = itagToQuality(itag)
                     }
                 )
