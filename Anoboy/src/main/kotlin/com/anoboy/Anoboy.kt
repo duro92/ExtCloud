@@ -218,23 +218,43 @@ class Anoboy : MainAPI() {
         }
 
         fun filterStreamingIfAvailable(elements: List<Element>): List<Element> {
-            val hasStreamingOrDownload = elements.any { anchor ->
+            val hasStreaming = elements.any { anchor ->
                 val text = anchor.text()
                 val href = anchor.attr("href")
                 text.contains("streaming", true) ||
-                    text.contains("download", true) ||
-                    href.contains("streaming", true) ||
-                    href.contains("download", true)
+                    href.contains("streaming", true)
             }
-            return if (hasStreamingOrDownload) {
-                elements.filter { anchor ->
+
+            if (hasStreaming) {
+                return elements.filter { anchor ->
                     val text = anchor.text()
                     val href = anchor.attr("href")
                     text.contains("streaming", true) || href.contains("streaming", true)
                 }
-            } else {
-                elements
             }
+
+            val hasDownload = elements.any { anchor ->
+                val text = anchor.text()
+                val href = anchor.attr("href")
+                text.contains("download", true) ||
+                    href.contains("download", true) ||
+                    href.contains("/download/", true)
+            }
+
+            if (hasDownload) {
+                val nonDownloadElements = elements.filterNot { anchor ->
+                    val text = anchor.text()
+                    val href = anchor.attr("href")
+                    text.contains("download", true) ||
+                        href.contains("download", true) ||
+                        href.contains("/download/", true)
+                }
+                if (nonDownloadElements.isNotEmpty()) {
+                    return nonDownloadElements
+                }
+            }
+
+            return elements
         }
 
         val seasonGroups = buildList {
