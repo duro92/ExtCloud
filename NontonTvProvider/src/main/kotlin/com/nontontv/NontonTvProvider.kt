@@ -245,7 +245,7 @@ class NontonTvProvider : MainAPI() {
         private const val KODI_LICENSE_KEY = "#KODIPROP:inputstream.adaptive.license_key="
 
         fun parse(content: String): PlaylistData {
-            val lines = content.lineSequence().toList()
+            val lines = normalizePlaylist(content).lineSequence().toList()
             val channels = mutableListOf<ChannelEntry>()
 
             var bufferedTitle: String? = null
@@ -355,6 +355,7 @@ class NontonTvProvider : MainAPI() {
                     }
 
                     !line.startsWith("#") && bufferedTitle != null -> {
+                        if (!line.looksLikePlayableUrl()) return@forEach
                         val url = line.extractUrl()?.normalizeBlank() ?: return@forEach
                         val sourceHeaders = bufferedHeaders.toMutableMap()
 
@@ -379,6 +380,24 @@ class NontonTvProvider : MainAPI() {
 
             flushChannel()
             return PlaylistData(channels = channels)
+        }
+
+        private fun normalizePlaylist(content: String): String {
+            return listOf(
+                "#EXTINF",
+                "#EXTVLCOPT",
+                "#EXTHTTP:",
+                "#KODIPROP:",
+                "#EXTM3U"
+            ).fold(
+                content
+                    .replace("\uFEFF", "")
+                    .replace("\u0000", "")
+                    .replace("\r\n", "\n")
+                    .replace('\r', '\n')
+            ) { acc, marker ->
+                acc.replace(marker, "\n$marker")
+            }
         }
 
         private fun parseExtHttp(rawJson: String): ParsedHttpHeaders {
@@ -475,6 +494,12 @@ class NontonTvProvider : MainAPI() {
             return substringBefore("|").trim().takeIf { it.isNotBlank() }
         }
 
+        private fun String.looksLikePlayableUrl(): Boolean {
+            val value = trim()
+            return value.startsWith("https://", ignoreCase = true) ||
+                value.startsWith("http://", ignoreCase = true)
+        }
+
         private fun String.extractUrlParameter(key: String): String? {
             if (!contains("|")) return null
             val paramSection = substringAfter("|")
@@ -520,7 +545,7 @@ class NontonTvProvider : MainAPI() {
 
     companion object {
         private const val PLAYLIST_URL =
-            "https://raw.githubusercontent.com/abidinrj/nontontv/main/playlist"
+            "https://raw.githubusercontent.com/KiTVNoSignaL/KiTV/refs/heads/main/PlayList"
         private const val CACHE_TTL_MS = 10 * 60 * 1000L
 
         @Volatile
