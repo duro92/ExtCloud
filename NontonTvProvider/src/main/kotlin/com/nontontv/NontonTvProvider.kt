@@ -14,7 +14,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class NontonTvProvider : MainAPI() {
     override var mainUrl = PLAYLIST_URL
-    override var name = "NontonTV Live🤡"
+    override var name = "NontonTV Live"
     override var lang = "id"
     override val hasMainPage = true
     override val hasQuickSearch = true
@@ -245,7 +245,7 @@ class NontonTvProvider : MainAPI() {
         private const val KODI_LICENSE_KEY = "#KODIPROP:inputstream.adaptive.license_key="
 
         fun parse(content: String): PlaylistData {
-            val lines = normalizePlaylist(content).lineSequence().toList()
+            val lines = tokenizePlaylist(content)
             val channels = mutableListOf<ChannelEntry>()
 
             var bufferedTitle: String? = null
@@ -322,6 +322,12 @@ class NontonTvProvider : MainAPI() {
                                 }
                             }
 
+                            line.startsWith("$EXT_VLC_OPT:http-referer=", ignoreCase = true) -> {
+                                line.substringAfter("=").normalizeBlank()?.let {
+                                    bufferedHeaders = bufferedHeaders + ("Referer" to it)
+                                }
+                            }
+
                             line.startsWith("$EXT_VLC_OPT:http-origin=", ignoreCase = true) -> {
                                 line.substringAfter("=").normalizeBlank()?.let {
                                     bufferedHeaders = bufferedHeaders + ("Origin" to it)
@@ -382,22 +388,54 @@ class NontonTvProvider : MainAPI() {
             return PlaylistData(channels = channels)
         }
 
-        private fun normalizePlaylist(content: String): String {
-            return listOf(
-                "#EXTINF",
-                "#EXTVLCOPT",
-                "#EXTHTTP:",
+        private fun tokenizePlaylist(content: String): List<String> {
+            val normalized = content
+                .replace("\uFEFF", "")
+                .replace("\u0000", "")
+                .replace("\r\n", "\n")
+                .replace('\r', '\n')
+
+            val markers = listOf(
+                EXT_INF,
+                EXT_VLC_OPT,
+                EXT_HTTP,
                 "#KODIPROP:",
                 "#EXTM3U"
-            ).fold(
-                content
-                    .replace("\uFEFF", "")
-                    .replace("\u0000", "")
-                    .replace("\r\n", "\n")
-                    .replace('\r', '\n')
-            ) { acc, marker ->
-                acc.replace(marker, "\n$marker")
+            )
+            val tokens = mutableListOf<String>()
+            val current = StringBuilder()
+            var insideQuotes = false
+            var index = 0
+
+            fun flushToken() {
+                val token = current.toString().trim()
+                if (token.isNotEmpty()) tokens += token
+                current.clear()
             }
+
+            while (index < normalized.length) {
+                val char = normalized[index]
+                if (char == '"') insideQuotes = !insideQuotes
+
+                val marker = if (!insideQuotes) {
+                    markers.firstOrNull { normalized.startsWith(it, index) }
+                } else {
+                    null
+                }
+                val startsUrl = !insideQuotes &&
+                    normalized.startsWithUrl(index) &&
+                    normalized.isStandaloneUrlStart(index)
+
+                if (marker != null || startsUrl) {
+                    flushToken()
+                }
+
+                current.append(char)
+                index++
+            }
+
+            flushToken()
+            return tokens
         }
 
         private fun parseExtHttp(rawJson: String): ParsedHttpHeaders {
@@ -498,6 +536,16 @@ class NontonTvProvider : MainAPI() {
             val value = trim()
             return value.startsWith("https://", ignoreCase = true) ||
                 value.startsWith("http://", ignoreCase = true)
+        }
+
+        private fun String.startsWithUrl(index: Int): Boolean {
+            return startsWith("https://", index, ignoreCase = true) ||
+                startsWith("http://", index, ignoreCase = true)
+        }
+
+        private fun String.isStandaloneUrlStart(index: Int): Boolean {
+            if (index == 0) return true
+            return this[index - 1].isWhitespace()
         }
 
         private fun String.extractUrlParameter(key: String): String? {
