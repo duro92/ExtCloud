@@ -20,7 +20,9 @@ https://raw.githubusercontent.com/duro92/ExtCloud/main/repo.json
 
 Jika ingin support pengembangan:
 
-🔗 https://saweria.co/duro92
+<a href="https://saweria.co/duro92" target="_blank">
+  <img src="https://img.shields.io/badge/Donate-Saweria-orange?style=for-the-badge&logo=ko-fi" />
+</a>
 
 ---
 
