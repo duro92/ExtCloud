@@ -966,6 +966,52 @@ object SoraExtractor : SoraStream() {
             }
         }
 
+        fun getRiveStreamType(
+            url: String,
+            format: String? = null,
+            contentType: String? = null,
+            sample: String? = null,
+        ): ExtractorLinkType? {
+            val normalizedFormat = format.orEmpty()
+            val normalizedContentType = contentType.orEmpty().lowercase()
+            val normalizedSample = sample.orEmpty()
+
+            return when {
+                normalizedFormat.contains("hls", ignoreCase = true) ||
+                    url.contains(".m3u8", ignoreCase = true) ||
+                    normalizedContentType.contains("mpegurl") ||
+                    normalizedSample.contains("#EXTM3U") -> ExtractorLinkType.M3U8
+                normalizedContentType.contains("video") ||
+                    normalizedContentType.contains("octet-stream") ||
+                    url.contains(".mp4", ignoreCase = true) -> INFER_TYPE
+                else -> null
+            }
+        }
+
+        suspend fun resolveDirectRiveStreamUrl(
+            url: String,
+            format: String? = null,
+        ): Pair<String, ExtractorLinkType>? {
+            val probe = retry {
+                app.get(
+                    url,
+                    headers = headers + mapOf("Range" to "bytes=0-4095"),
+                    allowRedirects = true,
+                    timeout = 15,
+                )
+            } ?: return null
+
+            val finalUrl = probe.url.ifBlank { url }
+            val contentType =
+                (probe.headers["Content-Type"] ?: probe.headers["content-type"]).orEmpty()
+            val sample = runCatching {
+                String(probe.body.bytes().take(4096).toByteArray(), Charsets.UTF_8)
+            }.getOrDefault("")
+
+            val type = getRiveStreamType(finalUrl, format, contentType, sample) ?: return null
+            return finalUrl to type
+        }
+
         val sourceApiUrl =
             "$RiveStreamAPI/api/backendfetch?requestID=VideoProviderServices&secretKey=rive"
         val sourceList = retry { app.get(sourceApiUrl, headers).parsedSafe<RiveStreamSource>() }
@@ -1009,6 +1055,7 @@ object SoraExtractor : SoraStream() {
                         val label = if(src.optString("source").contains("AsiaCloud",ignoreCase = true)) "RiveStream ${src.optString("source")}[${src.optString("quality")}]" else "RiveStream ${src.optString("source")}"
                         val quality = Qualities.P1080.value
                         val url = src.optString("url")
+                        val format = src.optString("format")
 
                         try {
                             if (url.contains("proxy?url=")) {
@@ -1038,8 +1085,7 @@ object SoraExtractor : SoraStream() {
                                     val videoHeaders =
                                         mapOf("Referer" to referer, "Origin" to origin)
 
-                                    val type = if (decodedUrl.contains(".m3u8", ignoreCase = true))
-                                        ExtractorLinkType.M3U8 else INFER_TYPE
+                                    val type = getRiveStreamType(decodedUrl, format) ?: continue
 
                                     callback.invoke(newExtractorLink(label, label, decodedUrl, type) {
                                         this.quality = quality
@@ -1050,14 +1096,15 @@ object SoraExtractor : SoraStream() {
                                     // Log error decoding proxy
                                 }
                             } else {
-                                val type = if (url.contains(".m3u8", ignoreCase = true))
-                                    ExtractorLinkType.M3U8 else INFER_TYPE
+                                val resolved = resolveDirectRiveStreamUrl(url, format) ?: continue
+                                val directUrl = resolved.first
+                                val type = resolved.second
 
                                 callback.invoke(
                                     newExtractorLink(
                                         "$label (VLC)",
                                         "$label (VLC)",
-                                        url,
+                                        directUrl,
                                         type
                                     ) {
                                         this.referer = ""
