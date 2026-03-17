@@ -2,7 +2,7 @@ version = 1
 
 cloudstream {
     language = "en"
-    authors = listOf("Codex")
+    authors = listOf("Duro92")
     description = "AutoEmbed watch-v2 movie and TV catalog provider"
     status = 1
     tvTypes = listOf(

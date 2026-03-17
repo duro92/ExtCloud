@@ -169,6 +169,7 @@ class AutoEmbedProvider : MainAPI() {
             tmdbId = linkData.tmdbId,
             season = linkData.season,
             episode = linkData.episode,
+            subtitleCallback = subtitleCallback,
             callback = wrappedCallback
         )
         invokeVidfast(
@@ -326,6 +327,7 @@ class AutoEmbedProvider : MainAPI() {
         tmdbId: Int?,
         season: Int?,
         episode: Int?,
+        subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
     ) {
         if (tmdbId == null) return
@@ -337,13 +339,15 @@ class AutoEmbedProvider : MainAPI() {
             "https://vidlink.pro/$type/$tmdbId/$season/$episode"
         }
 
-        val videoLink = app.get(
+        val response = app.get(
             url,
             interceptor = WebViewResolver(
-                Regex("""https://vidlink\.pro/api/b/$type/A{32}"""),
+                Regex("""https://vidlink\.pro/api/b/$type/[^"'\\s]+"""),
                 timeout = 15_000L
             )
-        ).parsedSafe<VidlinkSources>()?.stream?.playlist ?: return
+        ).parsedSafe<VidlinkSources>() ?: return
+
+        val videoLink = response.stream?.playlist ?: return
 
         callback.invoke(
             newExtractorLink(
@@ -355,6 +359,15 @@ class AutoEmbedProvider : MainAPI() {
                 referer = "https://vidlink.pro/"
             }
         )
+
+        response.stream?.captions.orEmpty().forEach { subtitle ->
+            subtitleCallback.invoke(
+                newSubtitleFile(
+                    subtitle.language ?: return@forEach,
+                    subtitle.url ?: return@forEach
+                )
+            )
+        }
     }
 
     private suspend fun invokeVidfast(
@@ -372,6 +385,35 @@ class AutoEmbedProvider : MainAPI() {
             "https://vidfast.pro/$type/$tmdbId"
         } else {
             "https://vidfast.pro/$type/$tmdbId/$season/$episode"
+        }
+
+        app.get(
+            url,
+            interceptor = WebViewResolver(
+                Regex("""https://vidfast\.pro/api/b/$type/[^"'\\s]+"""),
+                timeout = 15_000L
+            )
+        ).parsedSafe<VidlinkSources>()?.stream?.let { stream ->
+            callback.invoke(
+                newExtractorLink(
+                    source = "Vidfast",
+                    name = "Vidfast",
+                    url = stream.playlist ?: return@let,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    referer = "https://vidfast.pro/"
+                }
+            )
+
+            stream.captions.orEmpty().forEach { subtitle ->
+                subtitleCallback.invoke(
+                    newSubtitleFile(
+                        subtitle.language ?: return@forEach,
+                        subtitle.url ?: return@forEach
+                    )
+                )
+            }
+            return
         }
 
         val response = app.get(
@@ -456,26 +498,42 @@ class AutoEmbedProvider : MainAPI() {
         if (tmdbId == null) return
 
         val mediaType = if (season == null) "movie" else "tv"
-        val url = if (season == null) {
-            "https://mapple.uk/watch/$mediaType/$tmdbId"
-        } else {
-            "https://mapple.uk/watch/$mediaType/$season-$episode/$tmdbId"
-        }
+        val tvSlug = if (season != null && episode != null) "$season-$episode" else ""
+        val requestToken = fetchMappleRequestToken() ?: return
+        val mappleHeaders = mapOf(
+            "Content-Type" to "application/json",
+            "Referer" to "https://mapple.uk/"
+        )
 
-        val payload = if (season == null) {
-            """[{"mediaId":$tmdbId,"mediaType":"$mediaType","tv_slug":"","source":"mapple","sessionId":"session_autoembed"}]"""
-        } else {
-            """[{"mediaId":$tmdbId,"mediaType":"$mediaType","tv_slug":"$season-$episode","source":"mapple","sessionId":"session_autoembed"}]"""
-        }
+        val encryptResponse = app.post(
+            "https://mapple.uk/api/encrypt",
+            requestBody = mapOf(
+                "data" to mapOf(
+                    "mediaId" to tmdbId,
+                    "mediaType" to mediaType,
+                    "tv_slug" to tvSlug,
+                    "source" to "mapple"
+                ),
+                "endpoint" to "stream-encrypted"
+            ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull()),
+            headers = mappleHeaders
+        ).parsedSafe<MappleEncryptResponse>() ?: return
 
-        val response = app.post(
-            url,
-            requestBody = payload.toRequestBody(RequestBodyTypes.TEXT.toMediaTypeOrNull()),
-            headers = mapOf("Next-Action" to "403f7ef15810cd565978d2ac5b7815bb0ff20258a5")
-        ).text
+        app.post(
+            "https://mapple.uk/api/stream-token",
+            requestBody = mapOf(
+                "mediaId" to tmdbId,
+                "mediaType" to mediaType,
+                "requestToken" to requestToken
+            ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull()),
+            headers = mappleHeaders
+        )
 
-        val video = tryParseJson<MappleSources>(response.substringAfter("1:").trim())
-            ?.data?.streamUrl ?: return
+        val streamEndpoint = encryptResponse.url ?: return
+        val video = app.get(
+            "https://mapple.uk$streamEndpoint&requestToken=${requestToken.urlEncoded()}",
+            referer = "https://mapple.uk/"
+        ).parsedSafe<MappleSources>()?.data?.streamUrl ?: return
 
         callback.invoke(
             newExtractorLink(
@@ -500,11 +558,19 @@ class AutoEmbedProvider : MainAPI() {
             ?.forEach { subtitle ->
                 subtitleCallback.invoke(
                     newSubtitleFile(
-                        subtitle.display ?: return@forEach,
+                        subtitle.label ?: subtitle.display ?: return@forEach,
                         subtitle.url ?: return@forEach
                     )
                 )
             }
+    }
+
+    private suspend fun fetchMappleRequestToken(): String? {
+        val page = app.get("https://mapple.uk/").text
+        return Regex("window\\.__REQUEST_TOKEN__\\s*=\\s*\"([^\"]+)\"")
+            .find(page)
+            ?.groupValues
+            ?.getOrNull(1)
     }
 
     private suspend fun invokeWebsiteExtractors(
@@ -746,6 +812,12 @@ class AutoEmbedProvider : MainAPI() {
 
     data class VidlinkStream(
         @JsonProperty("playlist") val playlist: String? = null,
+        @JsonProperty("captions") val captions: List<VidlinkCaption>? = null,
+    )
+
+    data class VidlinkCaption(
+        @JsonProperty("url") val url: String? = null,
+        @JsonProperty("language") val language: String? = null,
     )
 
     data class VidlinkSources(
@@ -757,7 +829,12 @@ class AutoEmbedProvider : MainAPI() {
     )
 
     data class MappleSubtitle(
+        @JsonProperty("label") val label: String? = null,
         @JsonProperty("display") val display: String? = null,
+        @JsonProperty("url") val url: String? = null,
+    )
+
+    data class MappleEncryptResponse(
         @JsonProperty("url") val url: String? = null,
     )
 
