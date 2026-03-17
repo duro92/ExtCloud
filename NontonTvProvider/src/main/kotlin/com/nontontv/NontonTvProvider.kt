@@ -545,7 +545,7 @@ class NontonTvProvider : MainAPI() {
 
     companion object {
         private const val PLAYLIST_URL =
-            "https://raw.githubusercontent.com/KiTVNoSignaL/KiTV/refs/heads/main/PlayList"
+            "https://akmal-wijaya.tv-stream.workers.dev/"
         private const val CACHE_TTL_MS = 10 * 60 * 1000L
 
         @Volatile
