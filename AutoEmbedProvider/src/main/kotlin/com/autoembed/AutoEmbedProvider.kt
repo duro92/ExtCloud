@@ -185,18 +185,20 @@ class AutoEmbedProvider : MainAPI() {
             episode = linkData.episode,
             callback = wrappedCallback
         )
-        invokeMapple(
-            tmdbId = linkData.tmdbId,
-            season = linkData.season,
-            episode = linkData.episode,
-            subtitleCallback = subtitleCallback,
-            callback = wrappedCallback
-        )
         invokeWebsiteExtractors(
             linkData = linkData,
             subtitleCallback = subtitleCallback,
             callback = wrappedCallback
         )
+        if (emitted.isEmpty()) {
+            invokeMapple(
+                tmdbId = linkData.tmdbId,
+                season = linkData.season,
+                episode = linkData.episode,
+                subtitleCallback = subtitleCallback,
+                callback = wrappedCallback
+            )
+        }
         return emitted.isNotEmpty()
     }
 
@@ -538,7 +540,7 @@ class AutoEmbedProvider : MainAPI() {
         callback.invoke(
             newExtractorLink(
                 source = "Mapple",
-                name = "Mapple",
+                name = "Mapple [Intro]",
                 url = video,
                 type = ExtractorLinkType.M3U8
             ) {
