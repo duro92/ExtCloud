@@ -1009,7 +1009,7 @@ object SoraExtractor : SoraStream() {
             }.getOrDefault("")
 
             val type = getRiveStreamType(finalUrl, format, contentType, sample) ?: return null
-            return finalUrl to type
+            return url to type
         }
 
         val sourceApiUrl =
@@ -1082,8 +1082,11 @@ object SoraExtractor : SoraStream() {
 
                                     val referer = headersMap["Referer"] ?: ""
                                     val origin = headersMap["Origin"] ?: ""
-                                    val videoHeaders =
-                                        mapOf("Referer" to referer, "Origin" to origin)
+                                    val videoHeaders = buildMap {
+                                        put("User-Agent", USER_AGENT)
+                                        if (referer.isNotBlank()) put("Referer", referer)
+                                        if (origin.isNotBlank()) put("Origin", origin)
+                                    }
 
                                     val type = getRiveStreamType(decodedUrl, format) ?: continue
 
@@ -1109,6 +1112,7 @@ object SoraExtractor : SoraStream() {
                                     ) {
                                         this.referer = ""
                                         this.quality = quality
+                                        this.headers = mapOf("User-Agent" to USER_AGENT)
                                     })
                             }
                         } catch (e: Exception) {
