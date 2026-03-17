@@ -3,20 +3,27 @@ package com.autoembed
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
+import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import java.util.Base64
 import java.net.URLEncoder
+import java.util.Base64
+import com.lagradost.nicehttp.RequestBodyTypes
+import kotlinx.coroutines.runBlocking
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
 class AutoEmbedProvider : MainAPI() {
     override var mainUrl = "https://watch-v2.autoembed.cc"
-    override var name = "AutoEmbed😒"
+    override var name = "AutoEmbed"
     override var lang = "en"
     override val hasMainPage = true
     override val hasQuickSearch = true
@@ -140,19 +147,56 @@ class AutoEmbedProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val linkData = parseJson<LinkData>(data)
+        val emitted = mutableSetOf<String>()
+        val wrappedCallback: (ExtractorLink) -> Unit = { link ->
+            val key = "${link.name}|${link.url}"
+            if (emitted.add(key)) callback(link)
+        }
+
         invokeVidsrc(
             imdbId = linkData.imdbId,
             season = linkData.season,
             episode = linkData.episode,
-            callback = callback
+            callback = wrappedCallback
         )
         invokeVixsrc(
             tmdbId = linkData.tmdbId,
             season = linkData.season,
             episode = linkData.episode,
-            callback = callback
+            callback = wrappedCallback
         )
-        return true
+        invokeVidlink(
+            tmdbId = linkData.tmdbId,
+            season = linkData.season,
+            episode = linkData.episode,
+            callback = wrappedCallback
+        )
+        invokeVidfast(
+            tmdbId = linkData.tmdbId,
+            season = linkData.season,
+            episode = linkData.episode,
+            subtitleCallback = subtitleCallback,
+            callback = wrappedCallback
+        )
+        invokeVidsrccx(
+            tmdbId = linkData.tmdbId,
+            season = linkData.season,
+            episode = linkData.episode,
+            callback = wrappedCallback
+        )
+        invokeMapple(
+            tmdbId = linkData.tmdbId,
+            season = linkData.season,
+            episode = linkData.episode,
+            subtitleCallback = subtitleCallback,
+            callback = wrappedCallback
+        )
+        invokeWebsiteExtractors(
+            linkData = linkData,
+            subtitleCallback = subtitleCallback,
+            callback = wrappedCallback
+        )
+        return emitted.isNotEmpty()
     }
 
     private suspend fun buildEpisodes(tmdbId: Int, imdbId: String?): List<Episode> {
@@ -221,7 +265,7 @@ class AutoEmbedProvider : MainAPI() {
             callback.invoke(
                 newExtractorLink(
                     source = "Vidsrc",
-                    name = "Vidsrc",
+                    name = "Vidsrc [Net]",
                     url = streamUrl,
                     type = ExtractorLinkType.M3U8
                 )
@@ -261,8 +305,8 @@ class AutoEmbedProvider : MainAPI() {
             }"
 
         listOf(
-            VixsrcSource("Vixsrc [Alpha]", primaryUrl, url),
-            VixsrcSource("Vixsrc [Beta]", proxiedUrl, "$vixsrcApi/"),
+            VixsrcSource("Vidpro [Alpha]", primaryUrl, url),
+            VixsrcSource("Vidpro [Beta]", proxiedUrl, "$vixsrcApi/"),
         ).forEach { source ->
             callback.invoke(
                 newExtractorLink(
@@ -275,6 +319,293 @@ class AutoEmbedProvider : MainAPI() {
                     headers = mapOf("Accept" to "*/*")
                 }
             )
+        }
+    }
+
+    private suspend fun invokeVidlink(
+        tmdbId: Int?,
+        season: Int?,
+        episode: Int?,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        if (tmdbId == null) return
+
+        val type = if (season == null) "movie" else "tv"
+        val url = if (season == null) {
+            "https://vidlink.pro/$type/$tmdbId"
+        } else {
+            "https://vidlink.pro/$type/$tmdbId/$season/$episode"
+        }
+
+        val videoLink = app.get(
+            url,
+            interceptor = WebViewResolver(
+                Regex("""https://vidlink\.pro/api/b/$type/A{32}"""),
+                timeout = 15_000L
+            )
+        ).parsedSafe<VidlinkSources>()?.stream?.playlist ?: return
+
+        callback.invoke(
+            newExtractorLink(
+                source = "Echo",
+                name = "Echo",
+                url = videoLink,
+                type = ExtractorLinkType.M3U8
+            ) {
+                referer = "https://vidlink.pro/"
+            }
+        )
+    }
+
+    private suspend fun invokeVidfast(
+        tmdbId: Int?,
+        season: Int?,
+        episode: Int?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        if (tmdbId == null) return
+
+        val module = "hezushon/bunafmin/1000098709565419/lu/40468dfa/de97f995ef83714e8ce88dc789c1c1acc4760231/y"
+        val type = if (season == null) "movie" else "tv"
+        val url = if (season == null) {
+            "https://vidfast.pro/$type/$tmdbId"
+        } else {
+            "https://vidfast.pro/$type/$tmdbId/$season/$episode"
+        }
+
+        val response = app.get(
+            url,
+            interceptor = WebViewResolver(
+                Regex("""https://vidfast\.pro/$module/LAk"""),
+                timeout = 15_000L
+            )
+        ).text
+
+        tryParseJson<List<VidFastServers>>(response)
+            ?.filter { it.description?.contains("Original audio", ignoreCase = true) == true }
+            ?.forEachIndexed { index, server ->
+                val source = app.get(
+                    "https://vidfast.pro/$module/N8b-ENGCMKNz/${server.data}",
+                    referer = "https://vidfast.pro/"
+                ).parsedSafe<VidFastSources>() ?: return@forEachIndexed
+
+                callback.invoke(
+                    newExtractorLink(
+                        source = "Vidfast",
+                        name = "Vidfast [${server.name ?: "Server ${index + 1}"}]",
+                        url = source.url ?: return@forEachIndexed,
+                        type = ExtractorLinkType.M3U8
+                    )
+                )
+
+                if (index == 0) {
+                    source.tracks.orEmpty().forEach { subtitle ->
+                        subtitleCallback.invoke(
+                            newSubtitleFile(
+                                subtitle.label ?: return@forEach,
+                                subtitle.file ?: return@forEach
+                            )
+                        )
+                    }
+                }
+            }
+    }
+
+    private suspend fun invokeVidsrccx(
+        tmdbId: Int?,
+        season: Int?,
+        episode: Int?,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        if (tmdbId == null) return
+
+        val filePath = if (season == null) {
+            "/media/$tmdbId/master.m3u8"
+        } else {
+            "/media/$tmdbId-$season-$episode/master.m3u8"
+        }
+
+        val video = app.post(
+            "https://8ball.piracy.cloud/api/generate-secure-url",
+            requestBody = mapOf("filePath" to filePath)
+                .toJson()
+                .toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
+        ).parsedSafe<VidsrccxSource>()?.secureUrl ?: return
+
+        callback.invoke(
+            newExtractorLink(
+                source = "Mono",
+                name = "Mono",
+                url = video,
+                type = ExtractorLinkType.M3U8
+            ) {
+                referer = "https://vidsrc.cx/"
+                headers = mapOf("Accept" to "*/*")
+            }
+        )
+    }
+
+    private suspend fun invokeMapple(
+        tmdbId: Int?,
+        season: Int?,
+        episode: Int?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        if (tmdbId == null) return
+
+        val mediaType = if (season == null) "movie" else "tv"
+        val url = if (season == null) {
+            "https://mapple.uk/watch/$mediaType/$tmdbId"
+        } else {
+            "https://mapple.uk/watch/$mediaType/$season-$episode/$tmdbId"
+        }
+
+        val payload = if (season == null) {
+            """[{"mediaId":$tmdbId,"mediaType":"$mediaType","tv_slug":"","source":"mapple","sessionId":"session_autoembed"}]"""
+        } else {
+            """[{"mediaId":$tmdbId,"mediaType":"$mediaType","tv_slug":"$season-$episode","source":"mapple","sessionId":"session_autoembed"}]"""
+        }
+
+        val response = app.post(
+            url,
+            requestBody = payload.toRequestBody(RequestBodyTypes.TEXT.toMediaTypeOrNull()),
+            headers = mapOf("Next-Action" to "403f7ef15810cd565978d2ac5b7815bb0ff20258a5")
+        ).text
+
+        val video = tryParseJson<MappleSources>(response.substringAfter("1:").trim())
+            ?.data?.streamUrl ?: return
+
+        callback.invoke(
+            newExtractorLink(
+                source = "Mapple",
+                name = "Mapple",
+                url = video,
+                type = ExtractorLinkType.M3U8
+            ) {
+                referer = "https://mapple.uk/"
+                headers = mapOf("Accept" to "*/*")
+            }
+        )
+
+        val subtitleUrl = buildString {
+            append("https://mapple.uk/api/subtitles?id=$tmdbId&mediaType=$mediaType")
+            if (season != null && episode != null) {
+                append("&season=$season&episode=$episode")
+            }
+        }
+
+        tryParseJson<List<MappleSubtitle>>(app.get(subtitleUrl, referer = "https://mapple.uk/").text)
+            ?.forEach { subtitle ->
+                subtitleCallback.invoke(
+                    newSubtitleFile(
+                        subtitle.display ?: return@forEach,
+                        subtitle.url ?: return@forEach
+                    )
+                )
+            }
+    }
+
+    private suspend fun invokeWebsiteExtractors(
+        linkData: LinkData,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        for (server in buildWebsiteServers(linkData)) {
+            try {
+                loadExtractor(server.url, server.referer ?: server.url, subtitleCallback) { link ->
+                    runBlocking {
+                        callback.invoke(
+                            newExtractorLink(
+                                source = server.name,
+                                name = if (link.name.equals(server.name, ignoreCase = true)) {
+                                    server.name
+                                } else {
+                                    "${server.name} - ${link.name}"
+                                },
+                                url = link.url,
+                                type = link.type
+                            ) {
+                                referer = link.referer
+                                quality = link.quality
+                                headers = link.headers
+                                extractorData = link.extractorData
+                            }
+                        )
+                    }
+                }
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    private fun buildWebsiteServers(linkData: LinkData): List<WebsiteServer> {
+        val tmdbId = linkData.tmdbId ?: return emptyList()
+        val imdbId = linkData.imdbId
+        val season = linkData.season
+        val episode = linkData.episode
+
+        return if (season == null || episode == null) {
+            buildList {
+                add(WebsiteServer("AE(v2)", "https://player2.autoembed.cc/embed/movie/$tmdbId?autoplay=true"))
+                add(WebsiteServer("Autoembed", "https://player.autoembed.cc/embed/movie/$tmdbId?autoplay=true&download=true"))
+                add(WebsiteServer("4K", "https://player.videasy.net/movie/$tmdbId"))
+                add(WebsiteServer("Max", "https://ythd.org/embed/$tmdbId"))
+                add(WebsiteServer("Atlas", "https://vidsrc.cc/v2/embed/movie/$tmdbId"))
+                add(WebsiteServer("Vidsrc", "https://vidsrc.tw/embed/movie/$tmdbId?referrer=none"))
+                add(WebsiteServer("2Embed", "https://2embed.stream/embed/movie/$tmdbId"))
+                add(WebsiteServer("Cinemaos", "https://cinemaos.tech/player/$tmdbId"))
+                add(WebsiteServer("Vidnest", "https://vidnest.fun/movie/$tmdbId"))
+                add(WebsiteServer("Tongo", "https://www.NontonGo.win/embed/movie/$tmdbId"))
+                add(WebsiteServer("Bravo", "https://moviesapi.club/movie/$tmdbId"))
+                add(WebsiteServer("Vidora", "https://vidora.su/movie/$tmdbId?autoplay=true"))
+                add(WebsiteServer("Rip", "https://vidsrc.rip/embed/movie/$tmdbId"))
+                add(WebsiteServer("Spencer", "https://spencerdevs.xyz/movie/$tmdbId"))
+                add(WebsiteServer("Lima", "https://vidsrc.vip/embed/movie/$tmdbId"))
+                add(WebsiteServer("111", "https://111movies.com/movie/$tmdbId"))
+                add(WebsiteServer("Jade", "https://superflixapi.digital/filme/$tmdbId"))
+                add(WebsiteServer("French", "https://play.frembed.lat/api/film.php?id=$tmdbId"))
+                add(WebsiteServer("Spanish", "https://ythd.org/embed/$tmdbId"))
+                add(WebsiteServer("Rive", "https://rivestream.net/embed?type=movie&id=$tmdbId"))
+                add(WebsiteServer("Lika", "https://player4u.xyz/embed/movie/$tmdbId"))
+                add(WebsiteServer("Flicky", "https://flicky.host/embed/movie/?id=$tmdbId"))
+                imdbId?.let {
+                    add(WebsiteServer("Hdmovies", "$mainUrl/api/hdmovies/embed?type=movie&id=$it", mainUrl))
+                    add(WebsiteServer("Drive", "https://godriveplayer.com/player.php?imdb=$it"))
+                    add(WebsiteServer("Viet", "https://viet.autoembed.cc/movie/$it"))
+                }
+            }
+        } else {
+            buildList {
+                add(WebsiteServer("AE(v2)", "https://player2.autoembed.cc/embed/tv/$tmdbId/$season/$episode?autoplay=true"))
+                add(WebsiteServer("Autoembed", "https://player.autoembed.cc/embed/tv/$tmdbId/$season/$episode?autoplay=true&autonext=true&nextbutton=true&poster=true&download=true"))
+                add(WebsiteServer("4K", "https://player.videasy.net/tv/$tmdbId/$season/$episode"))
+                add(WebsiteServer("Max", "https://ythd.org/embed/$tmdbId/$season-$episode"))
+                add(WebsiteServer("Atlas", "https://vidsrc.cc/v2/embed/tv/$tmdbId/$season/$episode"))
+                add(WebsiteServer("Vidsrc", "https://vidsrc.tw/embed/tv/$tmdbId/$season-$episode?referrer=none"))
+                add(WebsiteServer("2Embed", "https://www.2embed.stream/embed/tv/$tmdbId/$season/$episode"))
+                add(WebsiteServer("Cinemaos", "https://cinemaos.tech/player/$tmdbId/$season/$episode"))
+                add(WebsiteServer("Vidnest", "https://vidnest.fun/tv/$tmdbId/$season/$episode"))
+                add(WebsiteServer("Tongo", "https://www.NontonGo.win/embed/tv/$tmdbId/$season/$episode"))
+                add(WebsiteServer("Drive", "https://godriveplayer.com/player.php?type=series&tmdb=$tmdbId&season=$season&episode=$episode"))
+                add(WebsiteServer("Bravo", "https://moviesapi.club/tv/$tmdbId/$season/$episode"))
+                add(WebsiteServer("Vidora", "https://vidora.su/tv/$tmdbId/$season/$episode?autoplay=true&autonextepisode=true"))
+                add(WebsiteServer("Rip", "https://vidsrc.rip/embed/tv/$tmdbId/$season/$episode"))
+                add(WebsiteServer("Spencer", "https://spencerdevs.xyz/tv/$tmdbId/$season/$episode"))
+                add(WebsiteServer("Lima", "https://vidsrc.vip/embed/tv/$tmdbId/$season/$episode"))
+                add(WebsiteServer("111", "https://111movies.com/tv/$tmdbId/$season/$episode"))
+                add(WebsiteServer("Jade", "https://superflixapi.digital/serie/$tmdbId/$season/$episode"))
+                add(WebsiteServer("French", "https://play.frembed.lat/api/serie.php?id=$tmdbId&sa=$season&epi=$episode"))
+                add(WebsiteServer("Spanish", "https://ythd.org/embed/$tmdbId/$season-$episode"))
+                add(WebsiteServer("Rive", "https://rivestream.net/embed?type=tv&id=$tmdbId&season=$season&episode=$episode"))
+                add(WebsiteServer("Lika", "https://player4u.xyz/embed/tv/$tmdbId/$season/$episode"))
+                add(WebsiteServer("Flicky", "https://flicky.host/embed/tv/?id=$tmdbId/$season/$episode"))
+                imdbId?.let {
+                    add(WebsiteServer("Hdmovies", "$mainUrl/api/hdmovies/embed?type=tv&id=$it", mainUrl))
+                    add(WebsiteServer("Viet", "https://viet.autoembed.cc/tv/$it/$season/$episode"))
+                }
+            }
         }
     }
 
@@ -389,6 +720,53 @@ class AutoEmbedProvider : MainAPI() {
         val name: String,
         val url: String,
         val referer: String,
+    )
+
+    data class WebsiteServer(
+        val name: String,
+        val url: String,
+        val referer: String? = null,
+    )
+
+    data class VidFastTrack(
+        @JsonProperty("label") val label: String? = null,
+        @JsonProperty("file") val file: String? = null,
+    )
+
+    data class VidFastSources(
+        @JsonProperty("url") val url: String? = null,
+        @JsonProperty("tracks") val tracks: List<VidFastTrack>? = null,
+    )
+
+    data class VidFastServers(
+        @JsonProperty("name") val name: String? = null,
+        @JsonProperty("data") val data: String? = null,
+        @JsonProperty("description") val description: String? = null,
+    )
+
+    data class VidlinkStream(
+        @JsonProperty("playlist") val playlist: String? = null,
+    )
+
+    data class VidlinkSources(
+        @JsonProperty("stream") val stream: VidlinkStream? = null,
+    )
+
+    data class VidsrccxSource(
+        @JsonProperty("secureUrl") val secureUrl: String? = null,
+    )
+
+    data class MappleSubtitle(
+        @JsonProperty("display") val display: String? = null,
+        @JsonProperty("url") val url: String? = null,
+    )
+
+    data class MappleSourceData(
+        @JsonProperty("stream_url") val streamUrl: String? = null,
+    )
+
+    data class MappleSources(
+        @JsonProperty("data") val data: MappleSourceData? = null,
     )
 
     data class TmdbGenres(
