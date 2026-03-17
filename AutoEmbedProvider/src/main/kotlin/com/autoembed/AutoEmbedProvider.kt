@@ -23,7 +23,7 @@ import org.jsoup.nodes.Element
 
 class AutoEmbedProvider : MainAPI() {
     override var mainUrl = "https://watch-v2.autoembed.cc"
-    override var name = "AutoEmbed"
+    override var name = "AutoEmbed😒"
     override var lang = "en"
     override val hasMainPage = true
     override val hasQuickSearch = true
