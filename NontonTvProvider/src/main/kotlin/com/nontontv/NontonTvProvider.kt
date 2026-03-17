@@ -14,7 +14,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class NontonTvProvider : MainAPI() {
     override var mainUrl = PLAYLIST_URL
-    override var name = "NontonTV Live"
+    override var name = "NontonTV Live🤡"
     override var lang = "id"
     override val hasMainPage = true
     override val hasQuickSearch = true
