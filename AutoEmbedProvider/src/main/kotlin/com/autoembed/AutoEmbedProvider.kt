@@ -16,7 +16,7 @@ import org.jsoup.nodes.Element
 
 class AutoEmbedProvider : MainAPI() {
     override var mainUrl = "https://watch-v2.autoembed.cc"
-    override var name = "AutoEmbed"
+    override var name = "AutoEmbed😒"
     override var lang = "en"
     override val hasMainPage = true
     override val hasQuickSearch = true
@@ -293,7 +293,7 @@ class AutoEmbedProvider : MainAPI() {
     }
 
     private fun Document.parseGridItems(): List<SearchResponse> {
-        return select("div.grid-list > a[href^=/movie/], div.grid-list > a[href^=/tv/]")
+        return select("div.grid-list a[href^=/movie/], div.grid-list a[href^=/tv/]")
             .mapNotNull { it.toSearchResponse() }
             .distinctBy { it.url }
     }
@@ -305,7 +305,9 @@ class AutoEmbedProvider : MainAPI() {
             ?: return null
         val poster = selectFirst("img")?.attr("src")?.takeIf { it.isNotBlank() }
         val year = selectFirst("p")?.text()?.trim()?.toIntOrNull()
-        val scoreValue = selectFirst("div")?.text()?.trim()?.toDoubleOrNull()
+        val scoreValue = select("div")
+            .mapNotNull { it.text().trim().toDoubleOrNull() }
+            .firstOrNull()
         val absoluteUrl = href.toAbsoluteUrl()
 
         return if (href.startsWith("/movie/")) {
