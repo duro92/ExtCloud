@@ -12,7 +12,6 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import org.jsoup.Jsoup
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import javax.crypto.Cipher
@@ -59,14 +58,23 @@ class VidsrcXyzAz : ExtractorApi() {
 
         val prorcpResponse = app.get(prorcpUrl, referer = getBaseUrl(rcpResponse.url))
         val streamUrl = extractStreamUrl(prorcpResponse.text) ?: return
-        val streamBase = getBaseUrl(streamUrl)
+        val segmentReferer = "${getBaseUrl(prorcpResponse.url)}/"
 
-        M3u8Helper.generateM3u8(
-            name,
-            streamUrl,
-            referer = "$streamBase/",
-            headers = mapOf("Accept" to "*/*"),
-        ).forEach(callback)
+        callback.invoke(
+            newExtractorLink(
+                source = name,
+                name = name,
+                url = streamUrl,
+                type = ExtractorLinkType.M3U8,
+            ) {
+                this.referer = segmentReferer
+                this.headers =
+                    mapOf(
+                        "Accept" to "*/*",
+                        "Referer" to segmentReferer,
+                    )
+            },
+        )
     }
 
     private fun extractCloudnestraPath(document: org.jsoup.nodes.Document, fallbackRegex: String): String? {
