@@ -17,6 +17,7 @@ import com.lagradost.cloudstream3.newMovieLoadResponse
 import com.lagradost.cloudstream3.newMovieSearchResponse
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -123,7 +124,11 @@ class Azmovies : MainAPI() {
             }.trim()
 
             runCatching {
-                loadExtractor(rawUrl, mainUrl, subtitleCallback, callback)
+                if (rawUrl.contains("vidsrc.xyz", true)) {
+                    loadVidsrc(rawUrl, button.attr("data-quality"), callback)
+                } else {
+                    loadExtractor(rawUrl, "$mainUrl/", subtitleCallback, callback)
+                }
             }.onFailure {
                 callback(
                     newExtractorLink(
@@ -140,6 +145,73 @@ class Azmovies : MainAPI() {
         }
 
         return true
+    }
+
+    private suspend fun loadVidsrc(
+        url: String,
+        qualityLabel: String,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        val embedResponse = app.get(url, referer = "$mainUrl/")
+        val rcpUrl =
+            (
+                embedResponse.document.selectFirst("iframe#player_iframe")?.attr("src")
+                    ?: Regex("""<iframe[^>]+id=["']player_iframe["'][^>]+src=["']([^"']+)""")
+                        .find(embedResponse.text)
+                        ?.groupValues
+                        ?.getOrNull(1)
+            )?.toAbsoluteUrl(getBaseUrl(embedResponse.url))
+                ?: return
+
+        val rcpResponse = app.get(rcpUrl, referer = "${getBaseUrl(embedResponse.url)}/")
+        val prorcpUrl =
+            Regex("""src:\s*['"](/prorcp/[^'"]+)""")
+                .find(rcpResponse.text)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toAbsoluteUrl(getBaseUrl(rcpResponse.url))
+                ?: return
+
+        val prorcpResponse = app.get(prorcpUrl, referer = "${getBaseUrl(rcpResponse.url)}/")
+        val rawStreamUrl =
+            Regex("""file:\s*"([^"]+list\.m3u8)"""")
+                .find(prorcpResponse.text)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?: return
+        val passHost =
+            Regex("""pass_path\s*=\s*["'](//[^"']+/rt_ping\.php)["']""")
+                .find(prorcpResponse.text)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.removePrefix("//")
+                ?.substringBefore("/rt_ping.php")
+                ?.substringAfter("app2.")
+                ?: "putgate.org"
+        val streamUrl =
+            if (rawStreamUrl.contains("{v5}")) {
+                rawStreamUrl.replace("{v5}", passHost)
+            } else {
+                rawStreamUrl
+            }
+        val segmentReferer = "${getBaseUrl(prorcpResponse.url)}/"
+
+        callback(
+            newExtractorLink(
+                source = name,
+                name = "VidSrc ${qualityLabel.trim()}".trim(),
+                url = streamUrl,
+                type = ExtractorLinkType.M3U8,
+            ) {
+                this.quality = getQualityFromName(qualityLabel)
+                this.referer = segmentReferer
+                this.headers =
+                    mapOf(
+                        "Accept" to "*/*",
+                        "Referer" to segmentReferer,
+                    )
+            },
+        )
     }
 
     private suspend fun request(url: String): NiceResponse {
@@ -230,11 +302,20 @@ class Azmovies : MainAPI() {
 
     private fun String?.toAbsoluteUrl(): String? {
         val value = this?.trim().takeIf { !it.isNullOrBlank() } ?: return null
+        return value.toAbsoluteUrl(mainUrl)
+    }
+
+    private fun String?.toAbsoluteUrl(baseUrl: String): String? {
+        val value = this?.trim().takeIf { !it.isNullOrBlank() } ?: return null
         return when {
             value.startsWith("//") -> "https:$value"
-            value.startsWith("/") -> "$mainUrl$value"
+            value.startsWith("/") -> "$baseUrl$value"
             else -> value
         }
+    }
+
+    private fun getBaseUrl(url: String): String {
+        return URI(url).let { "${it.scheme}://${it.host}" }
     }
 
     private val headers =
