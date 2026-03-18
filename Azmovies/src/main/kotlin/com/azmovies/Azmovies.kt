@@ -153,10 +153,19 @@ class Azmovies : MainAPI() {
 
         val token = response.text.substringAfter("var verifyToken = \"", "").substringBefore("\"")
         if (token.isBlank()) return response
+        val cookies = response.cookies
 
         app.post(
             "$mainUrl/verified",
-            headers = headers + mapOf("Content-Type" to "application/json"),
+            headers =
+                headers +
+                    mapOf(
+                        "Content-Type" to "application/json",
+                        "Origin" to mainUrl,
+                        "Referer" to url,
+                        "X-Requested-With" to "XMLHttpRequest",
+                    ),
+            cookies = cookies,
             requestBody =
                 mapOf("token" to token)
                     .toJson()
@@ -166,6 +175,7 @@ class Azmovies : MainAPI() {
         return app.get(
             url,
             headers = headers,
+            cookies = cookies,
             timeout = 30L,
         )
     }
