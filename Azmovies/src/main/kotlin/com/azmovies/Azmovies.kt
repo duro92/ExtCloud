@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.LoadResponse.Companion.addScore
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.MainPageRequest
+import com.lagradost.cloudstream3.Prerelease
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvType
@@ -18,7 +19,9 @@ import com.lagradost.cloudstream3.newMovieLoadResponse
 import com.lagradost.cloudstream3.newMovieSearchResponse
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkPlayList
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.PlayListItem
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -29,6 +32,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.jsoup.nodes.Element
 import java.net.URI
 import java.net.URLDecoder
+import kotlin.OptIn
 
 class Azmovies : MainAPI() {
     override var mainUrl = "https://azmovies.to"
@@ -311,39 +315,37 @@ class Azmovies : MainAPI() {
         items: List<VidsrcPlaylistItem>,
     ): ExtractorLink? {
         return runCatching {
-            val playListItemClass = Class.forName("com.lagradost.cloudstream3.utils.PlayListItem")
-            val playListItemCtor = playListItemClass.getConstructor(String::class.java, java.lang.Long.TYPE)
-            val playListObjects =
-                items.map { item ->
-                    playListItemCtor.newInstance(item.url, item.durationUs)
-                }
-
-            val extractorClass = Class.forName("com.lagradost.cloudstream3.utils.ExtractorLinkPlayList")
-            val ctor =
-                extractorClass.getConstructor(
-                    String::class.java,
-                    String::class.java,
-                    List::class.java,
-                    String::class.java,
-                    Integer.TYPE,
-                    Map::class.java,
-                    String::class.java,
-                    ExtractorLinkType::class.java,
-                    List::class.java,
-                )
-
-            ctor.newInstance(
+            buildNativePlaylistExtractorLink(
                 name,
                 linkName,
-                playListObjects,
                 referer,
                 quality,
                 headers,
-                "",
-                ExtractorLinkType.M3U8,
-                emptyList<Any>(),
-            ) as? ExtractorLink
+                items,
+            )
         }.getOrNull()
+    }
+
+    @OptIn(Prerelease::class)
+    private fun buildNativePlaylistExtractorLink(
+        sourceName: String,
+        linkName: String,
+        referer: String,
+        quality: Int,
+        headers: Map<String, String>,
+        items: List<VidsrcPlaylistItem>,
+    ): ExtractorLink {
+        return ExtractorLinkPlayList(
+            sourceName,
+            linkName,
+            items.map { PlayListItem(it.url, it.durationUs) },
+            referer,
+            quality,
+            headers,
+            "",
+            ExtractorLinkType.M3U8,
+            emptyList(),
+        )
     }
 
     private suspend fun request(url: String): NiceResponse {
