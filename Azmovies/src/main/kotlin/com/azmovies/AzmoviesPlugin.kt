@@ -8,6 +8,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 class AzmoviesPlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(Azmovies())
+        registerMainAPI(Noxx())
         registerExtractorAPI(ByseSayeveum())
         registerExtractorAPI(MyvidplayAz())
         registerExtractorAPI(HqqAz())
