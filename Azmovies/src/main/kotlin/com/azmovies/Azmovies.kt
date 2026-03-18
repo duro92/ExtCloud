@@ -125,7 +125,20 @@ class Azmovies : MainAPI() {
 
             runCatching {
                 if (rawUrl.contains("vidsrc.xyz", true)) {
-                    loadVidsrc(rawUrl, button.attr("data-quality"), callback)
+                    val handled = loadVidsrc(rawUrl, button.attr("data-quality"), callback)
+                    if (!handled) {
+                        callback(
+                            newExtractorLink(
+                                source = name,
+                                name = label.ifBlank { "VidSrc" },
+                                url = rawUrl,
+                                type = com.lagradost.cloudstream3.utils.INFER_TYPE,
+                            ) {
+                                this.referer = "$mainUrl/"
+                                this.quality = getQualityFromName(button.attr("data-quality"))
+                            },
+                        )
+                    }
                 } else {
                     loadExtractor(rawUrl, "$mainUrl/", subtitleCallback, callback)
                 }
@@ -151,7 +164,7 @@ class Azmovies : MainAPI() {
         url: String,
         qualityLabel: String,
         callback: (ExtractorLink) -> Unit,
-    ) {
+    ): Boolean {
         val embedResponse = app.get(url, referer = "$mainUrl/")
         val rcpUrl =
             (
@@ -161,7 +174,7 @@ class Azmovies : MainAPI() {
                         ?.groupValues
                         ?.getOrNull(1)
             )?.toAbsoluteUrl(getBaseUrl(embedResponse.url))
-                ?: return
+                ?: return false
 
         val rcpResponse = app.get(rcpUrl, referer = "${getBaseUrl(embedResponse.url)}/")
         val prorcpUrl =
@@ -170,7 +183,7 @@ class Azmovies : MainAPI() {
                 ?.groupValues
                 ?.getOrNull(1)
                 ?.toAbsoluteUrl(getBaseUrl(rcpResponse.url))
-                ?: return
+                ?: return false
 
         val prorcpResponse = app.get(prorcpUrl, referer = "${getBaseUrl(rcpResponse.url)}/")
         val rawStreamUrl =
@@ -178,7 +191,7 @@ class Azmovies : MainAPI() {
                 .find(prorcpResponse.text)
                 ?.groupValues
                 ?.getOrNull(1)
-                ?: return
+                ?: return false
         val passHost =
             Regex("""pass_path\s*=\s*["'](//[^"']+/rt_ping\.php)["']""")
                 .find(prorcpResponse.text)
@@ -212,6 +225,7 @@ class Azmovies : MainAPI() {
                     )
             },
         )
+        return true
     }
 
     private suspend fun request(url: String): NiceResponse {
