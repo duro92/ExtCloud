@@ -10,6 +10,7 @@ import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.USER_AGENT
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.mainPageOf
 import com.lagradost.cloudstream3.newHomePageResponse
@@ -28,6 +29,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.jsoup.nodes.Element
 import java.net.URI
 import java.net.URLDecoder
+import java.util.Base64
 
 class Azmovies : MainAPI() {
     override var mainUrl = "https://azmovies.to"
@@ -210,24 +212,57 @@ class Azmovies : MainAPI() {
                 rawStreamUrl
             }
         val segmentReferer = "${getBaseUrl(prorcpResponse.url)}/"
+        val playlistHeaders =
+            mapOf(
+                "Accept" to "*/*",
+                "Referer" to segmentReferer,
+                "Origin" to getBaseUrl(prorcpResponse.url),
+                "User-Agent" to USER_AGENT,
+            )
+        val decodedPlaylist = decodeVidsrcPlaylist(streamUrl, playlistHeaders) ?: return false
+        val dataUrl =
+            "data:application/vnd.apple.mpegurl;base64," +
+                Base64.getEncoder().encodeToString(decodedPlaylist.toByteArray())
 
         callback(
             newExtractorLink(
                 source = name,
                 name = "VidSrc ${qualityLabel.trim()}".trim(),
-                url = streamUrl,
+                url = dataUrl,
                 type = ExtractorLinkType.M3U8,
             ) {
                 this.quality = getQualityFromName(qualityLabel)
                 this.referer = segmentReferer
-                this.headers =
-                    mapOf(
-                        "Accept" to "*/*",
-                        "Referer" to segmentReferer,
-                    )
+                this.headers = playlistHeaders
             },
         )
         return true
+    }
+
+    private suspend fun decodeVidsrcPlaylist(
+        streamUrl: String,
+        headers: Map<String, String>,
+    ): String? {
+        val playlistBody = app.get(streamUrl, headers = headers).text
+        val decodedBody = decodeAsciiPlaylist(playlistBody)
+        return decodedBody.takeIf { it.contains("#EXTM3U") }
+    }
+
+    private fun decodeAsciiPlaylist(body: String): String {
+        if (body.contains("#EXTM3U")) return body
+
+        val values =
+            body
+                .lineSequence()
+                .map { it.trim() }
+                .filter { it.matches(Regex("""\d+""")) }
+                .mapNotNull { it.toIntOrNull() }
+                .toList()
+
+        if (values.isEmpty()) return body
+        return buildString(values.size) {
+            values.forEach { append(it.toChar()) }
+        }
     }
 
     private suspend fun request(url: String): NiceResponse {
