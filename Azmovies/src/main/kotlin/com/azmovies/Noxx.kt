@@ -233,7 +233,8 @@ class Noxx : MainAPI() {
         if (token.isNullOrBlank()) return response
         val cookies = response.cookies
 
-        app.post(
+        val verifiedResponse =
+            app.post(
             "$mainUrl/verified",
             data = mapOf("token" to token),
             cookies = cookies,
@@ -246,8 +247,9 @@ class Noxx : MainAPI() {
                     "X-Requested-With" to "XMLHttpRequest",
                 ),
         )
+        val verifiedCookies = if (verifiedResponse.cookies.isNotEmpty()) verifiedResponse.cookies else cookies
 
-        return app.get(url, headers = headers, cookies = cookies, timeout = 30L)
+        return app.get(url, headers = headers, cookies = verifiedCookies, timeout = 30L)
     }
 
     private fun NiceResponse.isVerificationPage(): Boolean {
