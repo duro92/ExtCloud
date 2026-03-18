@@ -101,11 +101,13 @@ class Azmovies : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
-        val document = request(data).document
+        val response = request(data)
+        val document = response.document
         val seenSubtitles = linkedSetOf<String>()
+        val servers = extractServerButtons(response.text, document)
 
-        document.select("button.server-btn[data-url]").forEach { button ->
-            val rawUrl = button.attr("data-url").replace("&amp;", "&").trim()
+        servers.forEach { button ->
+            val rawUrl = button.url.replace("&amp;", "&").trim()
             if (rawUrl.isBlank()) return@forEach
 
             extractSubtitle(rawUrl)?.let { subtitle ->
@@ -115,8 +117,8 @@ class Azmovies : MainAPI() {
             }
 
             val label = buildString {
-                append(button.attr("data-server").ifBlank { "Server" })
-                val quality = button.attr("data-quality").trim()
+                append(button.server.ifBlank { "Server" })
+                val quality = button.quality.trim()
                 if (quality.isNotBlank()) {
                     append(" ")
                     append(quality)
@@ -125,7 +127,7 @@ class Azmovies : MainAPI() {
 
             runCatching {
                 if (rawUrl.contains("vidsrc.xyz", true)) {
-                    val handled = loadVidsrc(rawUrl, button.attr("data-quality"), callback)
+                    val handled = loadVidsrc(rawUrl, button.quality, callback)
                     if (!handled) {
                         callback(
                             newExtractorLink(
@@ -135,7 +137,7 @@ class Azmovies : MainAPI() {
                                 type = com.lagradost.cloudstream3.utils.INFER_TYPE,
                             ) {
                                 this.referer = "$mainUrl/"
-                                this.quality = getQualityFromName(button.attr("data-quality"))
+                                this.quality = getQualityFromName(button.quality)
                             },
                         )
                     }
@@ -151,7 +153,7 @@ class Azmovies : MainAPI() {
                         type = com.lagradost.cloudstream3.utils.INFER_TYPE,
                     ) {
                         this.referer = "$mainUrl/"
-                        this.quality = getQualityFromName(button.attr("data-quality"))
+                        this.quality = getQualityFromName(button.quality)
                     },
                 )
             }
@@ -293,6 +295,31 @@ class Azmovies : MainAPI() {
         return SubtitleFile(label.ifBlank { "English" }, subtitleUrl)
     }
 
+    private fun extractServerButtons(html: String, document: org.jsoup.nodes.Document): List<ServerButton> {
+        val regexButtons =
+            Regex(
+                """<button[^>]*class=["'][^"']*server-btn[^"']*["'][^>]*data-url=["']([^"']+)["'][^>]*data-server=["']([^"']*)["'][^>]*data-quality=["']([^"']*)["'][^>]*>""",
+                setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+            ).findAll(html).map {
+                ServerButton(
+                    url = it.groupValues[1],
+                    server = it.groupValues[2],
+                    quality = it.groupValues[3],
+                )
+            }.toList()
+
+        val domButtons =
+            document.select("button.server-btn[data-url]").map {
+                ServerButton(
+                    url = it.attr("data-url"),
+                    server = it.attr("data-server"),
+                    quality = it.attr("data-quality"),
+                )
+            }
+
+        return (regexButtons + domButtons).distinctBy { "${it.server}|${it.url}" }
+    }
+
     private fun String.extractBackgroundUrl(): String? {
         return Regex("""url\(['"]?([^'")]+)""").find(this)?.groupValues?.getOrNull(1)
     }
@@ -331,6 +358,12 @@ class Azmovies : MainAPI() {
     private fun getBaseUrl(url: String): String {
         return URI(url).let { "${it.scheme}://${it.host}" }
     }
+
+    private data class ServerButton(
+        val url: String,
+        val server: String,
+        val quality: String,
+    )
 
     private val headers =
         mapOf(
