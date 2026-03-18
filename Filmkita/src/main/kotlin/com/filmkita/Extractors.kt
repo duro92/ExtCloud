@@ -3,6 +3,7 @@ package com.filmkita
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.USER_AGENT
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.base64Decode
 import com.lagradost.cloudstream3.extractors.StreamWishExtractor
 import com.lagradost.cloudstream3.extractors.VidStack
 import com.lagradost.cloudstream3.utils.ExtractorApi
@@ -11,6 +12,7 @@ import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
 import com.lagradost.cloudstream3.utils.fixUrl
 import com.lagradost.cloudstream3.utils.getAndUnpack
 import com.lagradost.cloudstream3.utils.getPacked
+import java.net.URLDecoder
 
 class Movearnpre : Dingtezuni() {
     override var name = "Movearnpre"
@@ -114,6 +116,48 @@ class Winvids : VidStack() {
     override var name = "Winvids"
     override var mainUrl = "https://winvids.strp2p.com"
     override var requiresReferer = true
+}
+
+class LayarwibuHls : ExtractorApi() {
+    override val name = "Layarwibu HLS"
+    override val mainUrl = "https://hls-bekop.layarwibu.com"
+    override val requiresReferer = false
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        val headers =
+            mapOf(
+                "Referer" to "$mainUrl/",
+                "Origin" to mainUrl,
+                "User-Agent" to USER_AGENT,
+            )
+
+        val streamUrl =
+            when {
+                url.contains("/player2/") -> {
+                    val encoded = url.substringAfterLast("/").substringBefore("?")
+                    runCatching {
+                            base64Decode(URLDecoder.decode(encoded, "UTF-8"))
+                                .trim()
+                                .takeIf { it.startsWith("http") }
+                        }
+                        .getOrNull()
+                }
+                url.contains(".m3u8") -> url
+                else -> null
+            } ?: return
+
+        generateM3u8(
+            name,
+            streamUrl,
+            referer = "$mainUrl/",
+            headers = headers,
+        ).forEach(callback)
+    }
 }
 
 open class Dintezuvio : ExtractorApi() {

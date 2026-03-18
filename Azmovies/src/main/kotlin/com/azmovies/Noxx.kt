@@ -27,7 +27,7 @@ import java.net.URLDecoder
 
 class Noxx : MainAPI() {
     override var mainUrl = "https://noxx.to"
-    override var name = "Noxx"
+    override var name = "Noxx😅"
     override val hasMainPage = true
     override val hasQuickSearch = true
     override var lang = "en"

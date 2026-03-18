@@ -33,7 +33,7 @@ import java.net.URLDecoder
 
 class Azmovies : MainAPI() {
     override var mainUrl = "https://azmovies.to"
-    override var name = "Azmovies"
+    override var name = "Azmovies😪"
     override val hasMainPage = true
     override val hasQuickSearch = true
     override var lang = "en"

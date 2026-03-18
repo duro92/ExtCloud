@@ -16,6 +16,7 @@ class FilmkitaPlugin : Plugin() {
         registerExtractorAPI(Ghbrisk())
         registerExtractorAPI(Dhcplay())
         registerExtractorAPI(Winvids())
+        registerExtractorAPI(LayarwibuHls())
         registerExtractorAPI(Movearnpre())
         registerExtractorAPI(Vidshare())
         registerExtractorAPI(Dintezuvio())
