@@ -13,7 +13,7 @@ import org.jsoup.nodes.Element
 
 class Filmkita : MainAPI() {
     override var mainUrl = "https://s3.iix.llc"
-    override var name = "Filmkita"
+    override var name = "Filmkita😐"
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
@@ -97,19 +97,8 @@ class Filmkita : MainAPI() {
                     .map { eps ->
                         val href = fixUrl(eps.attr("href"))
                         val episodeName = eps.text().trim()
-                        val episodeNumber =
-                            Regex("Episode\\s*(\\d+)", RegexOption.IGNORE_CASE)
-                                .find(episodeName)
-                                ?.groupValues
-                                ?.getOrNull(1)
-                                ?.toIntOrNull()
-                                ?: episodeName.filter { it.isDigit() }.toIntOrNull()
-                        val seasonNumber =
-                            Regex("Season\\s*(\\d+)", RegexOption.IGNORE_CASE)
-                                .find(episodeName)
-                                ?.groupValues
-                                ?.getOrNull(1)
-                                ?.toIntOrNull()
+                        val episodeNumber = extractEpisodeNumber(episodeName, href)
+                        val seasonNumber = extractSeasonNumber(episodeName, href)
 
                         newEpisode(href) {
                             name = episodeName
@@ -271,6 +260,33 @@ class Filmkita : MainAPI() {
         if (this == null) return null
         val regex = Regex("(-\\d*x\\d*)").find(this)?.groupValues?.get(0) ?: return this
         return replace(regex, "")
+    }
+
+    private fun extractEpisodeNumber(name: String, href: String): Int? {
+        return (
+            Regex("""(?:eps?|episode)\s*(\d+)""", RegexOption.IGNORE_CASE)
+                .find(name)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?: Regex("""-episode-(\d+)""", RegexOption.IGNORE_CASE)
+                    .find(href)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                ?: Regex("""\b(\d+)\b""").find(name)?.groupValues?.getOrNull(1)
+        )?.toIntOrNull()
+    }
+
+    private fun extractSeasonNumber(name: String, href: String): Int? {
+        return (
+            Regex("""(?:^|\b)s(?:eason)?\s*(\d+)""", RegexOption.IGNORE_CASE)
+                .find(name)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?: Regex("""-season-(\d+)""", RegexOption.IGNORE_CASE)
+                    .find(href)
+                    ?.groupValues
+                    ?.getOrNull(1)
+        )?.toIntOrNull()
     }
 
     private fun getBaseUrl(url: String): String {
