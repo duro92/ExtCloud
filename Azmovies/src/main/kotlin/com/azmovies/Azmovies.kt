@@ -7,7 +7,6 @@ import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.LoadResponse.Companion.addScore
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.MainPageRequest
-import com.lagradost.cloudstream3.Prerelease
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvType
@@ -19,9 +18,8 @@ import com.lagradost.cloudstream3.newMovieLoadResponse
 import com.lagradost.cloudstream3.newMovieSearchResponse
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkPlayList
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.PlayListItem
+import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -32,7 +30,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.jsoup.nodes.Element
 import java.net.URI
 import java.net.URLDecoder
-import kotlin.OptIn
 
 class Azmovies : MainAPI() {
     override var mainUrl = "https://azmovies.to"
@@ -173,131 +170,71 @@ class Azmovies : MainAPI() {
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
         val embedUrl = normalizeVidsrcUrl(url)
-        val embedResponse =
-            app.get(
-                embedUrl,
-                referer = "$mainUrl/",
-                headers =
-                    mapOf(
-                        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                        "User-Agent" to USER_AGENT,
-                    ),
-            )
-        val rcpUrl =
-            (
-                embedResponse.document.selectFirst("iframe#player_iframe")?.attr("src")
-                    ?: Regex("""<iframe[^>]+id=["']player_iframe["'][^>]+src=["']([^"']+)""")
-                        .find(embedResponse.text)
-                        ?.groupValues
-                        ?.getOrNull(1)
-                    ?: Regex("""data-hash=["']([^"']+)["']""")
-                        .find(embedResponse.text)
-                        ?.groupValues
-                        ?.getOrNull(1)
-                        ?.let { "//cloudnestra.com/rcp/$it" }
-            )?.toAbsoluteUrl(getBaseUrl(embedResponse.url))
-                ?: return false
-
-        val rcpResponse = app.get(rcpUrl, referer = "${getBaseUrl(embedResponse.url)}/")
-        val prorcpUrl =
-            Regex("""src:\s*['"](/prorcp/[^'"]+)""")
-                .find(rcpResponse.text)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?.toAbsoluteUrl(getBaseUrl(rcpResponse.url))
-                ?: return false
-
-        val prorcpResponse = app.get(prorcpUrl, referer = "${getBaseUrl(rcpResponse.url)}/")
-        val rawStreamUrl =
-            Regex("""file:\s*"([^"]+list\.m3u8)"""")
-                .find(prorcpResponse.text)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?: return false
-        val passHost =
-            Regex("""pass_path\s*=\s*["'](//[^"']+/rt_ping\.php)["']""")
-                .find(prorcpResponse.text)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?.removePrefix("//")
-                ?.substringBefore("/rt_ping.php")
-                ?.substringAfter("app2.")
-                ?: "putgate.org"
-        val streamUrl =
-            if (rawStreamUrl.contains("{v5}")) {
-                rawStreamUrl.replace("{v5}", passHost)
-            } else {
-                rawStreamUrl
-            }
-        val segmentReferer = "${getBaseUrl(prorcpResponse.url)}/"
-        val playlistHeaders =
+        val browserHeaders =
             mapOf(
-                "Accept" to "*/*",
-                "Referer" to segmentReferer,
-                "Origin" to getBaseUrl(prorcpResponse.url),
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "User-Agent" to USER_AGENT,
             )
-        val playlistItems = decodeVidsrcPlaylist(streamUrl, playlistHeaders) ?: return false
-        val playlistLink =
-            buildPlaylistExtractorLink(
-                linkName = "VidSrc ${qualityLabel.trim()}".trim(),
-                quality = getQualityFromName(qualityLabel),
-                referer = segmentReferer,
-                headers = playlistHeaders,
-                items = playlistItems,
-            )
+        val embedResponse = app.get(embedUrl, referer = "$mainUrl/", headers = browserHeaders)
+        val twoEmbedHash = extractVidsrcServerHash(embedResponse.text, "2Embed") ?: return false
+        val rcpUrl = "//cloudnestra.com/rcp/$twoEmbedHash".toAbsoluteUrl(getBaseUrl(embedResponse.url)) ?: return false
+        val rcpResponse = app.get(rcpUrl, referer = "${getBaseUrl(embedResponse.url)}/", headers = browserHeaders)
+        val srcrcpUrl =
+            Regex("""/srcrcp/[^'"\s<]+""")
+                .find(rcpResponse.text)
+                ?.value
+                ?.toAbsoluteUrl(getBaseUrl(rcpResponse.url))
                 ?: return false
+        val twoEmbedResponse = app.get(srcrcpUrl, referer = "${getBaseUrl(rcpResponse.url)}/", headers = browserHeaders)
+        val xpsUrl =
+            Regex("""https://streamsrcs\.2embed\.cc/xps\?[^'"\s<]+""", RegexOption.IGNORE_CASE)
+                .find(twoEmbedResponse.text)
+                ?.value
+                ?: return false
+        val xpsResponse = app.get(xpsUrl, referer = "${getBaseUrl(twoEmbedResponse.url)}/", headers = browserHeaders)
+        val xpassSlug = xpsResponse.document.selectFirst("iframe#framesrc")?.attr("src")?.trim().takeIf { !it.isNullOrBlank() } ?: return false
+        val xpassUrl = "https://play.xpass.top/e/movie/$xpassSlug"
+        val xpassResponse = app.get(xpassUrl, referer = "${getBaseUrl(xpsResponse.url)}/", headers = browserHeaders)
+        val playlistUrl =
+            Regex(""""playlist":"([^"]+/playlist\.json)"""")
+                .find(xpassResponse.text)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.replace("\\/", "/")
+                ?.toAbsoluteUrl(getBaseUrl(xpassResponse.url))
+                ?: return false
+        val playlistResponse =
+            app.get(
+                playlistUrl,
+                referer = xpassUrl,
+                headers = mapOf("Accept" to "application/json,text/plain,*/*", "User-Agent" to USER_AGENT),
+            )
+        val streamUrl =
+            Regex(""""file"\s*:\s*"([^"]+)"""")
+                .findAll(playlistResponse.text)
+                .mapNotNull { it.groupValues.getOrNull(1) }
+                .map { it.decodeJsonUrl() }
+                .firstOrNull { it.contains(".m3u8", true) }
+                ?: return false
+        val streamHeaders =
+            mapOf(
+                "Accept" to "*/*",
+                "Referer" to "https://play.xpass.top/",
+                "Origin" to "https://play.xpass.top",
+                "User-Agent" to USER_AGENT,
+            )
 
-        callback(
-            playlistLink,
-        )
+        val generatedLinks =
+            M3u8Helper.generateM3u8(
+                "VidSrc",
+                streamUrl,
+                "https://play.xpass.top/",
+                headers = streamHeaders,
+            )
+
+        if (generatedLinks.isEmpty()) return false
+        generatedLinks.forEach(callback)
         return true
-    }
-
-    private suspend fun decodeVidsrcPlaylist(
-        streamUrl: String,
-        headers: Map<String, String>,
-    ): List<VidsrcPlaylistItem>? {
-        val playlistBody = app.get(streamUrl, headers = headers).text
-        val decodedBody = decodeAsciiPlaylist(playlistBody)
-        if (!decodedBody.contains("#EXTM3U")) return null
-
-        val items = mutableListOf<VidsrcPlaylistItem>()
-        var currentDurationUs = 0L
-
-        decodedBody.lineSequence().forEach { rawLine ->
-            val line = rawLine.trim()
-            when {
-                line.startsWith("#EXTINF:", true) -> {
-                    val seconds = line.substringAfter("#EXTINF:").substringBefore(",").toDoubleOrNull()
-                    currentDurationUs = ((seconds ?: 0.0) * 1_000_000L).toLong()
-                }
-                line.isBlank() || line.startsWith("#") -> Unit
-                else -> {
-                    items += VidsrcPlaylistItem(line.toAbsoluteUrl(streamUrl) ?: line, currentDurationUs)
-                    currentDurationUs = 0L
-                }
-            }
-        }
-
-        return items.takeIf { it.isNotEmpty() }
-    }
-
-    private fun decodeAsciiPlaylist(body: String): String {
-        if (body.contains("#EXTM3U")) return body
-
-        val values =
-            body
-                .lineSequence()
-                .map { it.trim() }
-                .filter { it.matches(Regex("""\d+""")) }
-                .mapNotNull { it.toIntOrNull() }
-                .toList()
-
-        if (values.isEmpty()) return body
-        return buildString(values.size) {
-            values.forEach { append(it.toChar()) }
-        }
     }
 
     private fun normalizeVidsrcUrl(url: String): String {
@@ -307,45 +244,18 @@ class Azmovies : MainAPI() {
         return "$url${joiner}autoplay=1"
     }
 
-    private fun buildPlaylistExtractorLink(
-        linkName: String,
-        quality: Int,
-        referer: String,
-        headers: Map<String, String>,
-        items: List<VidsrcPlaylistItem>,
-    ): ExtractorLink? {
-        return runCatching {
-            buildNativePlaylistExtractorLink(
-                name,
-                linkName,
-                referer,
-                quality,
-                headers,
-                items,
-            )
-        }.getOrNull()
+    private fun extractVidsrcServerHash(
+        html: String,
+        serverName: String,
+    ): String? {
+        return Regex(
+            """<div\s+class=["']server["'][^>]*data-hash=["']([^"']+)["'][^>]*>\s*${Regex.escape(serverName)}\s*</div>""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        ).find(html)?.groupValues?.getOrNull(1)
     }
 
-    @OptIn(Prerelease::class)
-    private fun buildNativePlaylistExtractorLink(
-        sourceName: String,
-        linkName: String,
-        referer: String,
-        quality: Int,
-        headers: Map<String, String>,
-        items: List<VidsrcPlaylistItem>,
-    ): ExtractorLink {
-        return ExtractorLinkPlayList(
-            sourceName,
-            linkName,
-            items.map { PlayListItem(it.url, it.durationUs) },
-            referer,
-            quality,
-            headers,
-            "",
-            ExtractorLinkType.M3U8,
-            emptyList(),
-        )
+    private fun String.decodeJsonUrl(): String {
+        return replace("\\u0026", "&").replace("\\/", "/")
     }
 
     private suspend fun request(url: String): NiceResponse {
@@ -481,11 +391,6 @@ private data class ServerButton(
     val url: String,
     val server: String,
     val quality: String,
-)
-
-private data class VidsrcPlaylistItem(
-    val url: String,
-    val durationUs: Long,
 )
 
     private val headers =
