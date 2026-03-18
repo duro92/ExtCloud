@@ -168,7 +168,17 @@ class Azmovies : MainAPI() {
         qualityLabel: String,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
-        val embedResponse = app.get(url, referer = "$mainUrl/")
+        val embedUrl = normalizeVidsrcUrl(url)
+        val embedResponse =
+            app.get(
+                embedUrl,
+                referer = "$mainUrl/",
+                headers =
+                    mapOf(
+                        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "User-Agent" to USER_AGENT,
+                    ),
+            )
         val rcpUrl =
             (
                 embedResponse.document.selectFirst("iframe#player_iframe")?.attr("src")
@@ -176,6 +186,11 @@ class Azmovies : MainAPI() {
                         .find(embedResponse.text)
                         ?.groupValues
                         ?.getOrNull(1)
+                    ?: Regex("""data-hash=["']([^"']+)["']""")
+                        .find(embedResponse.text)
+                        ?.groupValues
+                        ?.getOrNull(1)
+                        ?.let { "//cloudnestra.com/rcp/$it" }
             )?.toAbsoluteUrl(getBaseUrl(embedResponse.url))
                 ?: return false
 
@@ -279,6 +294,13 @@ class Azmovies : MainAPI() {
         return buildString(values.size) {
             values.forEach { append(it.toChar()) }
         }
+    }
+
+    private fun normalizeVidsrcUrl(url: String): String {
+        if (!url.contains("vidsrc", true) && !url.contains("vsembed", true)) return url
+        if (url.contains("autoplay=", true)) return url
+        val joiner = if (url.contains("?")) "&" else "?"
+        return "$url${joiner}autoplay=1"
     }
 
     private fun buildPlaylistExtractorLink(
