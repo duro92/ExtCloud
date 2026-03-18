@@ -29,7 +29,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.jsoup.nodes.Element
 import java.net.URI
 import java.net.URLDecoder
-import java.util.Base64
 
 class Azmovies : MainAPI() {
     override var mainUrl = "https://azmovies.to"
@@ -219,22 +218,19 @@ class Azmovies : MainAPI() {
                 "Origin" to getBaseUrl(prorcpResponse.url),
                 "User-Agent" to USER_AGENT,
             )
-        val decodedPlaylist = decodeVidsrcPlaylist(streamUrl, playlistHeaders) ?: return false
-        val dataUrl =
-            "data:application/vnd.apple.mpegurl;base64," +
-                Base64.getEncoder().encodeToString(decodedPlaylist.toByteArray())
+        val playlistItems = decodeVidsrcPlaylist(streamUrl, playlistHeaders) ?: return false
+        val playlistLink =
+            buildPlaylistExtractorLink(
+                linkName = "VidSrc ${qualityLabel.trim()}".trim(),
+                quality = getQualityFromName(qualityLabel),
+                referer = segmentReferer,
+                headers = playlistHeaders,
+                items = playlistItems,
+            )
+                ?: return false
 
         callback(
-            newExtractorLink(
-                source = name,
-                name = "VidSrc ${qualityLabel.trim()}".trim(),
-                url = dataUrl,
-                type = ExtractorLinkType.M3U8,
-            ) {
-                this.quality = getQualityFromName(qualityLabel)
-                this.referer = segmentReferer
-                this.headers = playlistHeaders
-            },
+            playlistLink,
         )
         return true
     }
@@ -242,10 +238,30 @@ class Azmovies : MainAPI() {
     private suspend fun decodeVidsrcPlaylist(
         streamUrl: String,
         headers: Map<String, String>,
-    ): String? {
+    ): List<VidsrcPlaylistItem>? {
         val playlistBody = app.get(streamUrl, headers = headers).text
         val decodedBody = decodeAsciiPlaylist(playlistBody)
-        return decodedBody.takeIf { it.contains("#EXTM3U") }
+        if (!decodedBody.contains("#EXTM3U")) return null
+
+        val items = mutableListOf<VidsrcPlaylistItem>()
+        var currentDurationUs = 0L
+
+        decodedBody.lineSequence().forEach { rawLine ->
+            val line = rawLine.trim()
+            when {
+                line.startsWith("#EXTINF:", true) -> {
+                    val seconds = line.substringAfter("#EXTINF:").substringBefore(",").toDoubleOrNull()
+                    currentDurationUs = ((seconds ?: 0.0) * 1_000_000L).toLong()
+                }
+                line.isBlank() || line.startsWith("#") -> Unit
+                else -> {
+                    items += VidsrcPlaylistItem(line.toAbsoluteUrl(streamUrl) ?: line, currentDurationUs)
+                    currentDurationUs = 0L
+                }
+            }
+        }
+
+        return items.takeIf { it.isNotEmpty() }
     }
 
     private fun decodeAsciiPlaylist(body: String): String {
@@ -263,6 +279,49 @@ class Azmovies : MainAPI() {
         return buildString(values.size) {
             values.forEach { append(it.toChar()) }
         }
+    }
+
+    private fun buildPlaylistExtractorLink(
+        linkName: String,
+        quality: Int,
+        referer: String,
+        headers: Map<String, String>,
+        items: List<VidsrcPlaylistItem>,
+    ): ExtractorLink? {
+        return runCatching {
+            val playListItemClass = Class.forName("com.lagradost.cloudstream3.utils.PlayListItem")
+            val playListItemCtor = playListItemClass.getConstructor(String::class.java, java.lang.Long.TYPE)
+            val playListObjects =
+                items.map { item ->
+                    playListItemCtor.newInstance(item.url, item.durationUs)
+                }
+
+            val extractorClass = Class.forName("com.lagradost.cloudstream3.utils.ExtractorLinkPlayList")
+            val ctor =
+                extractorClass.getConstructor(
+                    String::class.java,
+                    String::class.java,
+                    List::class.java,
+                    String::class.java,
+                    Integer.TYPE,
+                    Map::class.java,
+                    String::class.java,
+                    ExtractorLinkType::class.java,
+                    List::class.java,
+                )
+
+            ctor.newInstance(
+                name,
+                linkName,
+                playListObjects,
+                referer,
+                quality,
+                headers,
+                "",
+                ExtractorLinkType.M3U8,
+                emptyList<Any>(),
+            ) as? ExtractorLink
+        }.getOrNull()
     }
 
     private suspend fun request(url: String): NiceResponse {
@@ -394,11 +453,16 @@ class Azmovies : MainAPI() {
         return URI(url).let { "${it.scheme}://${it.host}" }
     }
 
-    private data class ServerButton(
-        val url: String,
-        val server: String,
-        val quality: String,
-    )
+private data class ServerButton(
+    val url: String,
+    val server: String,
+    val quality: String,
+)
+
+private data class VidsrcPlaylistItem(
+    val url: String,
+    val durationUs: Long,
+)
 
     private val headers =
         mapOf(
