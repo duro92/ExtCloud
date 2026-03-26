@@ -10,7 +10,7 @@ import kotlin.random.Random
 
 class Kuramanime : MainAPI() {
     override var mainUrl = "https://v17.kuramanime.ink"
-    override var name = "Kuramanime"
+    override var name = "Kuramanime🥱"
     override var lang = "id"
     override val hasMainPage = true
     override val hasDownloadSupport = true
