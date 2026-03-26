@@ -8,5 +8,6 @@ import com.lagradost.cloudstream3.plugins.Plugin
 class KuramanimePlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(Kuramanime())
+        registerExtractorAPI(MyvidplayAz())
     }
 }
