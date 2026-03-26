@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.extractors.DoodLaExtractor
+import com.lagradost.cloudstream3.extractors.VidStack
 import kotlinx.coroutines.runBlocking
 
 object KuramanimeExtractors {
@@ -46,4 +47,10 @@ object KuramanimeExtractors {
 class MyvidplayAz : DoodLaExtractor() {
     override var name = "MyVidPlay"
     override var mainUrl = "https://myvidplay.com"
+}
+
+class Kuramavip : VidStack() {
+    override var name = "Kuramavip"
+    override var mainUrl = "https://kurama.rpmvip.com"
+    override var requiresReferer = true
 }

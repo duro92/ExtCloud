@@ -9,5 +9,6 @@ class KuramanimePlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(Kuramanime())
         registerExtractorAPI(MyvidplayAz())
+        registerExtractorAPI(Kuramavip())
     }
 }
