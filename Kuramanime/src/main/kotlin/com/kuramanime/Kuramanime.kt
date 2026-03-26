@@ -161,41 +161,102 @@ class Kuramanime : MainAPI() {
         }
 
         val emitted = linkedSetOf<String>()
+        val referer = episodeUrl.ifBlank { "$mainUrl/" }
 
-        document.select("video#player source[src]").forEach { source ->
-            val videoUrl = source.attr("abs:src").ifBlank { source.attr("src") }
-            if (videoUrl.isBlank() || !emitted.add(videoUrl)) return@forEach
+        suspend fun emitLink(
+            url: String,
+            name: String = "Kuramanime Auto",
+            quality: Int? = null,
+            type: ExtractorLinkType? = null,
+        ) {
+            if (url.isBlank() || !emitted.add(url)) return
+            val resolvedType = type ?: if (url.contains(".m3u8", true)) {
+                ExtractorLinkType.M3U8
+            } else {
+                ExtractorLinkType.VIDEO
+            }
             callback.invoke(
                 newExtractorLink(
                     source = "Kuramanime",
-                    name = "Kuramanime ${source.attr("size").ifBlank { "Auto" }}p",
-                    url = videoUrl,
-                    type = ExtractorLinkType.VIDEO
+                    name = name,
+                    url = url,
+                    type = resolvedType
                 ) {
-                    quality = source.attr("size").toIntOrNull() ?: Qualities.Unknown.value
-                    referer = "$mainUrl/"
-                    headers = mapOf("Referer" to "$mainUrl/")
+                    this.quality = quality ?: Qualities.Unknown.value
+                    this.referer = referer
+                    headers = mapOf(
+                        "Referer" to referer,
+                        "Origin" to mainUrl,
+                    )
                 }
             )
         }
 
-        document.selectFirst("video#player[src]")?.attr("abs:src")?.takeIf {
-            it.isNotBlank() && emitted.add(it)
-        }?.let { videoUrl ->
-            callback.invoke(
-                newExtractorLink(
-                    source = "Kuramanime",
-                    name = "Kuramanime Auto",
-                    url = videoUrl,
-                    type = if (videoUrl.contains(".m3u8", true)) {
-                        ExtractorLinkType.M3U8
-                    } else {
-                        ExtractorLinkType.VIDEO
-                    }
-                ) {
-                    referer = "$mainUrl/"
-                    headers = mapOf("Referer" to "$mainUrl/")
-                }
+        fun extractQuality(text: String): Int? {
+            return Regex("""\b(2160|1440|1080|720|576|480|360|240)\b""")
+                .find(text)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toIntOrNull()
+        }
+
+        document.select("#player[data-hls-src], video#player[data-hls-src], video[data-hls-src], [data-hls-src]")
+            .forEach { player ->
+                val hlsUrl = player.attr("abs:data-hls-src")
+                    .ifBlank { fixUrlNull(player.attr("data-hls-src")).orEmpty() }
+                emitLink(
+                    url = hlsUrl,
+                    name = "Kuramanime HLS",
+                    type = ExtractorLinkType.M3U8
+                )
+            }
+
+        document.select("video#player source[src]").forEach { source ->
+            val videoUrl = source.attr("abs:src").ifBlank { source.attr("src") }
+            val quality = source.attr("size").toIntOrNull()
+                ?: extractQuality("${source.id()} ${source.attr("label")} ${source.attr("title")}")
+            emitLink(
+                url = videoUrl,
+                name = "Kuramanime ${quality ?: "Auto"}${if (quality != null) "p" else ""}",
+                quality = quality
+            )
+        }
+
+        document.selectFirst("video#player[src], video[src], #player[src]")?.attr("abs:src")
+            ?.takeIf { it.isNotBlank() }
+            ?.let { videoUrl ->
+                emitLink(videoUrl)
+            }
+
+        document.select("[data-src], [data-url]").forEach { element ->
+            listOf("data-src", "data-url").forEach { attr ->
+                val mediaUrl = element.attr("abs:$attr")
+                    .ifBlank { fixUrlNull(element.attr(attr)).orEmpty() }
+                if (!mediaUrl.contains(".m3u8", true) && !mediaUrl.contains(".mp4", true)) return@forEach
+                val quality = extractQuality("${element.text()} ${element.className()} ${element.id()} $mediaUrl")
+                emitLink(
+                    url = mediaUrl,
+                    name = "Kuramanime ${quality ?: "Auto"}${if (quality != null) "p" else ""}",
+                    quality = quality
+                )
+            }
+        }
+
+        document.select("a[href]").forEach { anchor ->
+            val mediaUrl = anchor.attr("abs:href")
+                .ifBlank { fixUrlNull(anchor.attr("href")).orEmpty() }
+            if (
+                !mediaUrl.contains(".m3u8", true) &&
+                !mediaUrl.contains(".mp4", true) &&
+                !mediaUrl.contains("amiya.my.id", true)
+            ) {
+                return@forEach
+            }
+            val quality = extractQuality("${anchor.text()} ${anchor.className()} $mediaUrl")
+            emitLink(
+                url = mediaUrl,
+                name = "Kuramanime ${quality ?: "Direct"}${if (quality != null) "p" else ""}",
+                quality = quality
             )
         }
 
