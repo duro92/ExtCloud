@@ -187,14 +187,14 @@ class Kuramanime : MainAPI() {
             )
         }
 
-        suspend fun extractFromDocument(document: Document) {
+        suspend fun extractFromDocument(document: Document, serverName: String = "Kuramanime") {
             document.select("#player[data-hls-src], video#player[data-hls-src], video[data-hls-src], [data-hls-src]")
                 .forEach { player ->
                     val hlsUrl = player.attr("abs:data-hls-src")
                         .ifBlank { fixUrlNull(player.attr("data-hls-src")).orEmpty() }
                     emitLink(
                         url = hlsUrl,
-                        name = "Kuramanime HLS",
+                        name = "$serverName HLS",
                         type = ExtractorLinkType.M3U8
                     )
                 }
@@ -205,7 +205,7 @@ class Kuramanime : MainAPI() {
                     ?: extractQuality("${source.id()} ${source.attr("label")} ${source.attr("title")} ${source.attr("res")}")
                 emitLink(
                     url = videoUrl,
-                    name = "Kuramanime ${quality ?: "Auto"}${if (quality != null) "p" else ""}",
+                    name = "$serverName ${quality ?: "Auto"}${if (quality != null) "p" else ""}",
                     quality = quality
                 )
             }
@@ -224,7 +224,7 @@ class Kuramanime : MainAPI() {
                     val quality = extractQuality("${element.text()} ${element.className()} ${element.id()} $mediaUrl")
                     emitLink(
                         url = mediaUrl,
-                        name = "Kuramanime ${quality ?: "Auto"}${if (quality != null) "p" else ""}",
+                        name = "$serverName ${quality ?: "Auto"}${if (quality != null) "p" else ""}",
                         quality = quality
                     )
                 }
@@ -244,13 +244,13 @@ class Kuramanime : MainAPI() {
                 val quality = extractQuality("${anchor.text()} ${anchor.className()} $mediaUrl")
                 emitLink(
                     url = mediaUrl,
-                    name = "Kuramanime ${quality ?: "Direct"}${if (quality != null) "p" else ""}",
+                    name = "$serverName ${quality ?: "Direct"}${if (quality != null) "p" else ""}",
                     quality = quality
                 )
             }
         }
 
-        suspend fun extractFromText(body: String) {
+        suspend fun extractFromText(body: String, serverName: String = "Kuramanime") {
             val normalized = body.replace("\\/", "/")
             Regex("""https?://[^"'\\s<]+(?:\.m3u8|\.mp4)[^"'\\s<]*""")
                 .findAll(normalized)
@@ -260,7 +260,7 @@ class Kuramanime : MainAPI() {
                     val quality = extractQuality(mediaUrl)
                     emitLink(
                         url = mediaUrl,
-                        name = "Kuramanime ${quality ?: "Direct"}${if (quality != null) "p" else ""}",
+                        name = "$serverName ${quality ?: "Direct"}${if (quality != null) "p" else ""}",
                         quality = quality,
                         type = if (mediaUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                     )
@@ -309,6 +309,19 @@ class Kuramanime : MainAPI() {
             val routeScriptName = document.selectFirst("[data-kk]")?.attr("data-kk")
                 ?.trim()
                 ?.ifBlank { null }
+            val serverOptions = document.select("option[value]")
+                .mapNotNull { option ->
+                    val value = option.attr("value").trim().ifBlank { return@mapNotNull null }
+                    val label = option.text()
+                        .replace("\\s+".toRegex(), " ")
+                        .trim()
+                        .ifBlank { value }
+                    ServerOption(value, label)
+                }
+                .distinctBy { it.value.lowercase() }
+                .ifEmpty {
+                    listOf(ServerOption("kuramadrive", "Kuramadrive"))
+                }
 
             val jsEnv = when {
                 !routeScriptName.isNullOrBlank() -> {
@@ -388,35 +401,53 @@ class Kuramanime : MainAPI() {
                 .trim()
                 .ifBlank { throw ErrorLoadingException("Missing page token") }
 
-            val secureUrl = buildString {
-                append(episodeUrl)
-                append("?")
-                append(pageTokenKey)
-                append("=")
-                append(pageToken)
-                append("&")
-                append(streamServerKey)
-                append("=kuramadrive&page=")
-                append(Regex("""\d+""").find(pageNumber)?.value ?: "1")
-            }
+            val resolvedPage = Regex("""\d+""").find(pageNumber)?.value ?: "1"
 
-            val secureResponse = app.post(
-                secureUrl,
-                data = mapOf("authorization" to SECURE_AUTHORIZATION),
-                headers = mapOf(
-                    "Origin" to mainUrl,
-                    "X-Requested-With" to "XMLHttpRequest",
-                ),
-                referer = episodeUrl,
-                cookies = cookieJar,
-            ).also { mergeCookies(cookieJar, it.cookies) }
+            serverOptions.forEach { server ->
+                val secureUrl = buildString {
+                    append(episodeUrl)
+                    append("?")
+                    append(pageTokenKey)
+                    append("=")
+                    append(pageToken)
+                    append("&")
+                    append(streamServerKey)
+                    append("=")
+                    append(server.value)
+                    append("&page=")
+                    append(resolvedPage)
+                }
 
-            extractFromDocument(
-                runCatching { secureResponse.document }.getOrElse {
+                val secureResponse = app.post(
+                    secureUrl,
+                    data = mapOf("authorization" to SECURE_AUTHORIZATION),
+                    headers = mapOf(
+                        "Origin" to mainUrl,
+                        "X-Requested-With" to "XMLHttpRequest",
+                    ),
+                    referer = episodeUrl,
+                    cookies = cookieJar,
+                ).also { mergeCookies(cookieJar, it.cookies) }
+
+                val secureDocument = runCatching { secureResponse.document }.getOrElse {
                     Jsoup.parse(secureResponse.text, secureUrl)
                 }
-            )
-            extractFromText(secureResponse.text)
+                val iframeUrl = secureDocument.selectFirst("iframe[src]")?.attr("abs:src")
+                    ?.ifBlank { null }
+
+                if (!iframeUrl.isNullOrBlank()) {
+                    KuramanimeExtractors.loadKnownExtractor(
+                        url = iframeUrl,
+                        serverName = server.label,
+                        referer = referer,
+                        subtitleCallback = subtitleCallback,
+                        callback = callback,
+                    )
+                }
+
+                extractFromDocument(secureDocument, server.label)
+                extractFromText(secureResponse.text, server.label)
+            }
             emitted.isNotEmpty()
         }.getOrDefault(false)
 
@@ -512,4 +543,9 @@ class Kuramanime : MainAPI() {
     private companion object {
         const val SECURE_AUTHORIZATION = "qDBDmoKgQIdP6wmFGUCDo3vuVg9FBfV98"
     }
+
+    private data class ServerOption(
+        val value: String,
+        val label: String,
+    )
 }
