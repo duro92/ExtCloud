@@ -18,11 +18,9 @@ import com.lagradost.nicehttp.RequestBodyTypes
 import kotlinx.coroutines.runBlocking
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
-import org.jsoup.nodes.Document
-import org.jsoup.nodes.Element
 
 class AutoEmbedProvider : MainAPI() {
-    override var mainUrl = "https://watch-v2.autoembed.cc"
+    override var mainUrl = "https://www.themoviedb.org"
     override var name = "AutoEmbed😒"
     override var lang = "en"
     override val hasMainPage = true
@@ -36,21 +34,24 @@ class AutoEmbedProvider : MainAPI() {
     private val vixsrcProxy = "https://proxy.heistotron.uk"
 
     override val mainPage = mainPageOf(
-        "$mainUrl/trending/movie" to "Trending Movies",
-        "$mainUrl/movie/popular" to "Popular Movies",
-        "$mainUrl/movie/now-playing" to "Now Playing Movies",
-        "$mainUrl/movie/top-rated" to "Top Rated Movies",
-        "$mainUrl/movie/upcoming" to "Upcoming Movies",
-        "$mainUrl/trending/tv" to "Trending TV",
-        "$mainUrl/tv/popular" to "Popular TV",
-        "$mainUrl/tv/airing-today" to "Airing Today TV",
-        "$mainUrl/tv/top-rated" to "Top Rated TV",
+        "$tmdbApi/trending/movie/day?api_key=$tmdbApiKey" to "Trending Movies",
+        "$tmdbApi/movie/popular?api_key=$tmdbApiKey" to "Popular Movies",
+        "$tmdbApi/movie/now_playing?api_key=$tmdbApiKey" to "Now Playing Movies",
+        "$tmdbApi/movie/top_rated?api_key=$tmdbApiKey" to "Top Rated Movies",
+        "$tmdbApi/movie/upcoming?api_key=$tmdbApiKey" to "Upcoming Movies",
+        "$tmdbApi/trending/tv/day?api_key=$tmdbApiKey" to "Trending TV",
+        "$tmdbApi/tv/popular?api_key=$tmdbApiKey" to "Popular TV",
+        "$tmdbApi/tv/airing_today?api_key=$tmdbApiKey" to "Airing Today TV",
+        "$tmdbApi/tv/top_rated?api_key=$tmdbApiKey" to "Top Rated TV",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val document = app.get(buildPagedUrl(request.data, page)).document
-        val items = document.parseGridItems()
-        val hasNext = document.selectFirst("""a[aria-label="Go to next page"]""") != null
+        val response = app.get(buildPagedUrl(request.data, page)).parsedSafe<TmdbResults>()
+            ?: throw ErrorLoadingException("Invalid TMDB response")
+        val items = response.results.orEmpty().mapNotNull { media ->
+            media.toSearchResponse(inferMediaType(request.name))
+        }
+        val hasNext = response.page != null && response.totalPages != null && response.page < response.totalPages
         return newHomePageResponse(
             HomePageList(request.name, items),
             hasNext = hasNext
@@ -60,8 +61,9 @@ class AutoEmbedProvider : MainAPI() {
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/search?q=${query.urlEncoded()}&page=1"
-        return app.get(url).document.parseGridItems()
+        val url = "$tmdbApi/search/multi?api_key=$tmdbApiKey&query=${query.urlEncoded()}&page=1"
+        return app.get(url).parsedSafe<TmdbResults>()?.results.orEmpty()
+            .mapNotNull { media -> media.toSearchResponse() }
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -616,8 +618,6 @@ class AutoEmbedProvider : MainAPI() {
 
         return if (season == null || episode == null) {
             buildList {
-                add(WebsiteServer("AE(v2)", "https://player2.autoembed.cc/embed/movie/$tmdbId?autoplay=true"))
-                add(WebsiteServer("Autoembed", "https://player.autoembed.cc/embed/movie/$tmdbId?autoplay=true&download=true"))
                 add(WebsiteServer("4K", "https://player.videasy.net/movie/$tmdbId"))
                 add(WebsiteServer("Max", "https://ythd.org/embed/$tmdbId"))
                 add(WebsiteServer("Atlas", "https://vidsrc.cc/v2/embed/movie/$tmdbId"))
@@ -627,7 +627,6 @@ class AutoEmbedProvider : MainAPI() {
                 add(WebsiteServer("Vidnest", "https://vidnest.fun/movie/$tmdbId"))
                 add(WebsiteServer("Tongo", "https://www.NontonGo.win/embed/movie/$tmdbId"))
                 add(WebsiteServer("Bravo", "https://moviesapi.club/movie/$tmdbId"))
-                add(WebsiteServer("Vidora", "https://vidora.su/movie/$tmdbId?autoplay=true"))
                 add(WebsiteServer("Rip", "https://vidsrc.rip/embed/movie/$tmdbId"))
                 add(WebsiteServer("Spencer", "https://spencerdevs.xyz/movie/$tmdbId"))
                 add(WebsiteServer("Lima", "https://vidsrc.vip/embed/movie/$tmdbId"))
@@ -639,15 +638,11 @@ class AutoEmbedProvider : MainAPI() {
                 add(WebsiteServer("Lika", "https://player4u.xyz/embed/movie/$tmdbId"))
                 add(WebsiteServer("Flicky", "https://flicky.host/embed/movie/?id=$tmdbId"))
                 imdbId?.let {
-                    add(WebsiteServer("Hdmovies", "$mainUrl/api/hdmovies/embed?type=movie&id=$it", mainUrl))
                     add(WebsiteServer("Drive", "https://godriveplayer.com/player.php?imdb=$it"))
-                    add(WebsiteServer("Viet", "https://viet.autoembed.cc/movie/$it"))
                 }
             }
         } else {
             buildList {
-                add(WebsiteServer("AE(v2)", "https://player2.autoembed.cc/embed/tv/$tmdbId/$season/$episode?autoplay=true"))
-                add(WebsiteServer("Autoembed", "https://player.autoembed.cc/embed/tv/$tmdbId/$season/$episode?autoplay=true&autonext=true&nextbutton=true&poster=true&download=true"))
                 add(WebsiteServer("4K", "https://player.videasy.net/tv/$tmdbId/$season/$episode"))
                 add(WebsiteServer("Max", "https://ythd.org/embed/$tmdbId/$season-$episode"))
                 add(WebsiteServer("Atlas", "https://vidsrc.cc/v2/embed/tv/$tmdbId/$season/$episode"))
@@ -658,7 +653,6 @@ class AutoEmbedProvider : MainAPI() {
                 add(WebsiteServer("Tongo", "https://www.NontonGo.win/embed/tv/$tmdbId/$season/$episode"))
                 add(WebsiteServer("Drive", "https://godriveplayer.com/player.php?type=series&tmdb=$tmdbId&season=$season&episode=$episode"))
                 add(WebsiteServer("Bravo", "https://moviesapi.club/tv/$tmdbId/$season/$episode"))
-                add(WebsiteServer("Vidora", "https://vidora.su/tv/$tmdbId/$season/$episode?autoplay=true&autonextepisode=true"))
                 add(WebsiteServer("Rip", "https://vidsrc.rip/embed/tv/$tmdbId/$season/$episode"))
                 add(WebsiteServer("Spencer", "https://spencerdevs.xyz/tv/$tmdbId/$season/$episode"))
                 add(WebsiteServer("Lima", "https://vidsrc.vip/embed/tv/$tmdbId/$season/$episode"))
@@ -669,10 +663,6 @@ class AutoEmbedProvider : MainAPI() {
                 add(WebsiteServer("Rive", "https://rivestream.net/embed?type=tv&id=$tmdbId&season=$season&episode=$episode"))
                 add(WebsiteServer("Lika", "https://player4u.xyz/embed/tv/$tmdbId/$season/$episode"))
                 add(WebsiteServer("Flicky", "https://flicky.host/embed/tv/?id=$tmdbId/$season/$episode"))
-                imdbId?.let {
-                    add(WebsiteServer("Hdmovies", "$mainUrl/api/hdmovies/embed?type=tv&id=$it", mainUrl))
-                    add(WebsiteServer("Viet", "https://viet.autoembed.cc/tv/$it/$season/$episode"))
-                }
             }
         }
     }
@@ -691,36 +681,38 @@ class AutoEmbedProvider : MainAPI() {
         return SiteMedia(type = type, id = id)
     }
 
-    private fun Document.parseGridItems(): List<SearchResponse> {
-        return select("div.grid-list a[href^=/movie/], div.grid-list a[href^=/tv/]")
-            .mapNotNull { it.toSearchResponse() }
-            .distinctBy { it.url }
+    private fun inferMediaType(name: String): String? {
+        return when {
+            name.contains("movie", ignoreCase = true) -> "movie"
+            name.contains("tv", ignoreCase = true) -> "tv"
+            else -> null
+        }
     }
 
-    private fun Element.toSearchResponse(): SearchResponse? {
-        val href = attr("href").takeIf { it.startsWith("/movie/") || it.startsWith("/tv/") } ?: return null
-        val title = selectFirst("h2")?.text()?.trim()
-            ?: selectFirst("img")?.attr("alt")?.trim()
-            ?: return null
-        val poster = selectFirst("img")?.attr("src")?.takeIf { it.isNotBlank() }
-        val year = selectFirst("p")?.text()?.trim()?.toIntOrNull()
-        val scoreValue = select("div")
-            .mapNotNull { it.text().trim().toDoubleOrNull() }
-            .firstOrNull()
-        val absoluteUrl = href.toAbsoluteUrl()
+    private fun TmdbMedia.toSearchResponse(defaultMediaType: String? = null): SearchResponse? {
+        val resolvedMediaType = mediaType ?: defaultMediaType ?: when {
+            !title.isNullOrBlank() -> "movie"
+            !name.isNullOrBlank() -> "tv"
+            else -> null
+        } ?: return null
+        val resolvedTitle = title ?: name ?: return null
+        val resolvedId = id ?: return null
+        val year = (releaseDate ?: firstAirDate)?.substringBefore("-")?.toIntOrNull()
 
-        return if (href.startsWith("/movie/")) {
-            newMovieSearchResponse(title, absoluteUrl, TvType.Movie) {
-                posterUrl = poster
+        return if (resolvedMediaType == "movie") {
+            newMovieSearchResponse(resolvedTitle, "$mainUrl/movie/$resolvedId", TvType.Movie) {
+                posterUrl = posterPath.toPosterUrl()
                 this.year = year
-                scoreValue?.let { score = Score.from10(it) }
+                voteAverage?.let { score = Score.from10(it) }
+            }
+        } else if (resolvedMediaType == "tv") {
+            newTvSeriesSearchResponse(resolvedTitle, "$mainUrl/tv/$resolvedId", TvType.TvSeries) {
+                posterUrl = posterPath.toPosterUrl()
+                this.year = year
+                voteAverage?.let { score = Score.from10(it) }
             }
         } else {
-            newTvSeriesSearchResponse(title, absoluteUrl, TvType.TvSeries) {
-                posterUrl = poster
-                this.year = year
-                scoreValue?.let { score = Score.from10(it) }
-            }
+            null
         }
     }
 
@@ -758,10 +750,6 @@ class AutoEmbedProvider : MainAPI() {
     }
 
     private fun String.urlEncoded(): String = URLEncoder.encode(this, "UTF-8")
-
-    private fun String.toAbsoluteUrl(): String {
-        return if (startsWith("http")) this else "$mainUrl$this"
-    }
 
     private fun encodeForProxy(input: String): String {
         return URLEncoder.encode(input, "UTF-8").replace("+", "%20")
@@ -878,7 +866,9 @@ class AutoEmbedProvider : MainAPI() {
     )
 
     data class TmdbResults(
+        @JsonProperty("page") val page: Int? = null,
         @JsonProperty("results") val results: List<TmdbMedia>? = null,
+        @JsonProperty("total_pages") val totalPages: Int? = null,
     )
 
     data class TmdbMedia(
@@ -887,6 +877,8 @@ class AutoEmbedProvider : MainAPI() {
         @JsonProperty("title") val title: String? = null,
         @JsonProperty("name") val name: String? = null,
         @JsonProperty("poster_path") val posterPath: String? = null,
+        @JsonProperty("release_date") val releaseDate: String? = null,
+        @JsonProperty("first_air_date") val firstAirDate: String? = null,
         @JsonProperty("vote_average") val voteAverage: Double? = null,
     )
 
