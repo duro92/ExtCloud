@@ -2,11 +2,11 @@ package com.kuramanime
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
-import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import kotlin.random.Random
 
 class Kuramanime : MainAPI() {
     override var mainUrl = "https://v17.kuramanime.ink"
@@ -147,21 +147,16 @@ class Kuramanime : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val episodeUrl = data.substringBefore("?")
-        val secureRegex = Regex("${Regex.escape(episodeUrl)}\\?.*page=\\d+.*")
-        val secureResponse = app.get(
-            episodeUrl,
-            interceptor = WebViewResolver(
-                secureRegex,
-                timeout = 20_000L
-            )
-        )
-
-        val document = runCatching { secureResponse.document }.getOrElse {
-            Jsoup.parse(secureResponse.text, episodeUrl)
-        }
-
-        val emitted = linkedSetOf<String>()
         val referer = episodeUrl.ifBlank { "$mainUrl/" }
+        val emitted = linkedSetOf<String>()
+
+        fun extractQuality(text: String): Int? {
+            return Regex("""\b(2160|1440|1080|720|576|480|360|240)\b""")
+                .find(text)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toIntOrNull()
+        }
 
         suspend fun emitLink(
             url: String,
@@ -192,74 +187,249 @@ class Kuramanime : MainAPI() {
             )
         }
 
-        fun extractQuality(text: String): Int? {
-            return Regex("""\b(2160|1440|1080|720|576|480|360|240)\b""")
-                .find(text)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?.toIntOrNull()
-        }
+        suspend fun extractFromDocument(document: Document) {
+            document.select("#player[data-hls-src], video#player[data-hls-src], video[data-hls-src], [data-hls-src]")
+                .forEach { player ->
+                    val hlsUrl = player.attr("abs:data-hls-src")
+                        .ifBlank { fixUrlNull(player.attr("data-hls-src")).orEmpty() }
+                    emitLink(
+                        url = hlsUrl,
+                        name = "Kuramanime HLS",
+                        type = ExtractorLinkType.M3U8
+                    )
+                }
 
-        document.select("#player[data-hls-src], video#player[data-hls-src], video[data-hls-src], [data-hls-src]")
-            .forEach { player ->
-                val hlsUrl = player.attr("abs:data-hls-src")
-                    .ifBlank { fixUrlNull(player.attr("data-hls-src")).orEmpty() }
+            document.select("video#player source[src], video source[src]").forEach { source ->
+                val videoUrl = source.attr("abs:src").ifBlank { source.attr("src") }
+                val quality = source.attr("size").toIntOrNull()
+                    ?: extractQuality("${source.id()} ${source.attr("label")} ${source.attr("title")} ${source.attr("res")}")
                 emitLink(
-                    url = hlsUrl,
-                    name = "Kuramanime HLS",
-                    type = ExtractorLinkType.M3U8
+                    url = videoUrl,
+                    name = "Kuramanime ${quality ?: "Auto"}${if (quality != null) "p" else ""}",
+                    quality = quality
                 )
             }
 
-        document.select("video#player source[src]").forEach { source ->
-            val videoUrl = source.attr("abs:src").ifBlank { source.attr("src") }
-            val quality = source.attr("size").toIntOrNull()
-                ?: extractQuality("${source.id()} ${source.attr("label")} ${source.attr("title")}")
-            emitLink(
-                url = videoUrl,
-                name = "Kuramanime ${quality ?: "Auto"}${if (quality != null) "p" else ""}",
-                quality = quality
-            )
-        }
+            document.selectFirst("video#player[src], video[src], #player[src]")?.attr("abs:src")
+                ?.takeIf { it.isNotBlank() }
+                ?.let { videoUrl ->
+                    emitLink(videoUrl)
+                }
 
-        document.selectFirst("video#player[src], video[src], #player[src]")?.attr("abs:src")
-            ?.takeIf { it.isNotBlank() }
-            ?.let { videoUrl ->
-                emitLink(videoUrl)
+            document.select("[data-src], [data-url]").forEach { element ->
+                listOf("data-src", "data-url").forEach { attr ->
+                    val mediaUrl = element.attr("abs:$attr")
+                        .ifBlank { fixUrlNull(element.attr(attr)).orEmpty() }
+                    if (!mediaUrl.contains(".m3u8", true) && !mediaUrl.contains(".mp4", true)) return@forEach
+                    val quality = extractQuality("${element.text()} ${element.className()} ${element.id()} $mediaUrl")
+                    emitLink(
+                        url = mediaUrl,
+                        name = "Kuramanime ${quality ?: "Auto"}${if (quality != null) "p" else ""}",
+                        quality = quality
+                    )
+                }
             }
 
-        document.select("[data-src], [data-url]").forEach { element ->
-            listOf("data-src", "data-url").forEach { attr ->
-                val mediaUrl = element.attr("abs:$attr")
-                    .ifBlank { fixUrlNull(element.attr(attr)).orEmpty() }
-                if (!mediaUrl.contains(".m3u8", true) && !mediaUrl.contains(".mp4", true)) return@forEach
-                val quality = extractQuality("${element.text()} ${element.className()} ${element.id()} $mediaUrl")
+            document.select("a[href]").forEach { anchor ->
+                val mediaUrl = anchor.attr("abs:href")
+                    .ifBlank { fixUrlNull(anchor.attr("href")).orEmpty() }
+                if (
+                    !mediaUrl.contains(".m3u8", true) &&
+                    !mediaUrl.contains(".mp4", true) &&
+                    !mediaUrl.contains("my.id", true) &&
+                    !mediaUrl.contains("dropbox", true)
+                ) {
+                    return@forEach
+                }
+                val quality = extractQuality("${anchor.text()} ${anchor.className()} $mediaUrl")
                 emitLink(
                     url = mediaUrl,
-                    name = "Kuramanime ${quality ?: "Auto"}${if (quality != null) "p" else ""}",
+                    name = "Kuramanime ${quality ?: "Direct"}${if (quality != null) "p" else ""}",
                     quality = quality
                 )
             }
         }
 
-        document.select("a[href]").forEach { anchor ->
-            val mediaUrl = anchor.attr("abs:href")
-                .ifBlank { fixUrlNull(anchor.attr("href")).orEmpty() }
-            if (
-                !mediaUrl.contains(".m3u8", true) &&
-                !mediaUrl.contains(".mp4", true) &&
-                !mediaUrl.contains("amiya.my.id", true)
-            ) {
-                return@forEach
-            }
-            val quality = extractQuality("${anchor.text()} ${anchor.className()} $mediaUrl")
-            emitLink(
-                url = mediaUrl,
-                name = "Kuramanime ${quality ?: "Direct"}${if (quality != null) "p" else ""}",
-                quality = quality
-            )
+        suspend fun extractFromText(body: String) {
+            val normalized = body.replace("\\/", "/")
+            Regex("""https?://[^"'\\s<]+(?:\.m3u8|\.mp4)[^"'\\s<]*""")
+                .findAll(normalized)
+                .map { it.value }
+                .distinct()
+                .forEach { mediaUrl ->
+                    val quality = extractQuality(mediaUrl)
+                    emitLink(
+                        url = mediaUrl,
+                        name = "Kuramanime ${quality ?: "Direct"}${if (quality != null) "p" else ""}",
+                        quality = quality,
+                        type = if (mediaUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    )
+                }
         }
 
+        fun mergeCookies(target: MutableMap<String, String>, cookies: Map<String, String>) {
+            if (cookies.isEmpty()) return
+            target.putAll(cookies)
+        }
+
+        fun buildAuthRoute(prefix: String, route: String): String {
+            val cleanPrefix = prefix.trim().trim('/')
+            val cleanRoute = route.trim().trimStart('/')
+            return when {
+                cleanPrefix.isBlank() -> "$mainUrl/$cleanRoute"
+                cleanRoute.isBlank() -> "$mainUrl/$cleanPrefix"
+                else -> "$mainUrl/$cleanPrefix/$cleanRoute"
+            }
+        }
+
+        fun randomRequestId(length: Int = 6): String {
+            val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+            return buildString(length) {
+                repeat(length) {
+                    append(alphabet[Random.nextInt(alphabet.length)])
+                }
+            }
+        }
+
+        val nativeResolved = runCatching {
+            val pageResponse = app.get(episodeUrl, referer = "$mainUrl/")
+            val cookieJar = linkedMapOf<String, String>()
+            mergeCookies(cookieJar, pageResponse.cookies)
+
+            val document = runCatching { pageResponse.document }.getOrElse {
+                Jsoup.parse(pageResponse.text, episodeUrl)
+            }
+
+            val keepAliveUrl = document.selectFirst("#keepAliveTokenRoute")?.attr("value")
+                ?.ifBlank { null }
+                ?: "$mainUrl/misc/token/keep-alive"
+            val checkEpisodeUrl = document.selectFirst("#checkEp")?.attr("value")
+                ?.ifBlank { null }
+                ?: "${episodeUrl.trimEnd('/')}/check-episode"
+            val routeScriptName = document.selectFirst("[data-kk]")?.attr("data-kk")
+                ?.trim()
+                ?.ifBlank { null }
+
+            val jsEnv = when {
+                !routeScriptName.isNullOrBlank() -> {
+                    app.get(
+                        "$mainUrl/assets/js/$routeScriptName.js",
+                        referer = episodeUrl,
+                        cookies = cookieJar,
+                    ).also { mergeCookies(cookieJar, it.cookies) }.text
+                }
+                else -> {
+                    val arcSignalUrl = document.select("script[src]")
+                        .firstOrNull { it.attr("src").contains("arc-signal", true) }
+                        ?.attr("abs:src")
+                        ?.ifBlank { null }
+                        ?: throw ErrorLoadingException("Missing arc-signal JS")
+                    val arcSignalText = app.get(
+                        arcSignalUrl,
+                        referer = episodeUrl,
+                        cookies = cookieJar,
+                    ).also { mergeCookies(cookieJar, it.cookies) }.text
+                    val parsedScriptName = Regex("f=\"([A-Za-z0-9]+)\"")
+                        .find(arcSignalText)
+                        ?.groupValues
+                        ?.getOrNull(1)
+                        ?: throw ErrorLoadingException("Missing daily JS variable route")
+                    app.get(
+                        "$mainUrl/assets/js/$parsedScriptName.js",
+                        referer = episodeUrl,
+                        cookies = cookieJar,
+                    ).also { mergeCookies(cookieJar, it.cookies) }.text
+                }
+            }
+
+            val envMap = parseJsEnv(jsEnv)
+            val prefixAuth = envMap["MIX_PREFIX_AUTH_ROUTE_PARAM"]
+                ?: throw ErrorLoadingException("Missing auth prefix")
+            val authRoute = envMap["MIX_AUTH_ROUTE_PARAM"]
+                ?: throw ErrorLoadingException("Missing auth route")
+            val authKey = envMap["MIX_AUTH_KEY"]
+                ?: throw ErrorLoadingException("Missing auth key")
+            val authToken = envMap["MIX_AUTH_TOKEN"]
+                ?: throw ErrorLoadingException("Missing auth token")
+            val pageTokenKey = envMap["MIX_PAGE_TOKEN_KEY"]
+                ?: throw ErrorLoadingException("Missing page token key")
+            val streamServerKey = envMap["MIX_STREAM_SERVER_KEY"]
+                ?: throw ErrorLoadingException("Missing stream server key")
+
+            runCatching {
+                app.post(
+                    keepAliveUrl,
+                    data = emptyMap(),
+                    referer = episodeUrl,
+                    cookies = cookieJar,
+                ).also { mergeCookies(cookieJar, it.cookies) }
+            }
+
+            val pageNumber = app.get(
+                checkEpisodeUrl,
+                referer = episodeUrl,
+                cookies = cookieJar,
+            ).also { mergeCookies(cookieJar, it.cookies) }
+                .text
+                .trim()
+                .ifBlank { "1" }
+
+            val pageToken = app.get(
+                buildAuthRoute(prefixAuth, authRoute),
+                headers = mapOf(
+                    "X-Fuck-ID" to "$authKey:$authToken",
+                    "X-Request-ID" to randomRequestId(),
+                    "X-Request-Index" to "0",
+                ),
+                referer = episodeUrl,
+                cookies = cookieJar,
+            ).also { mergeCookies(cookieJar, it.cookies) }
+                .text
+                .trim()
+                .ifBlank { throw ErrorLoadingException("Missing page token") }
+
+            val secureUrl = buildString {
+                append(episodeUrl)
+                append("?")
+                append(pageTokenKey)
+                append("=")
+                append(pageToken)
+                append("&")
+                append(streamServerKey)
+                append("=kuramadrive&page=")
+                append(Regex("""\d+""").find(pageNumber)?.value ?: "1")
+            }
+
+            val secureResponse = app.post(
+                secureUrl,
+                data = mapOf("authorization" to SECURE_AUTHORIZATION),
+                headers = mapOf(
+                    "Origin" to mainUrl,
+                    "X-Requested-With" to "XMLHttpRequest",
+                ),
+                referer = episodeUrl,
+                cookies = cookieJar,
+            ).also { mergeCookies(cookieJar, it.cookies) }
+
+            extractFromDocument(
+                runCatching { secureResponse.document }.getOrElse {
+                    Jsoup.parse(secureResponse.text, secureUrl)
+                }
+            )
+            extractFromText(secureResponse.text)
+            emitted.isNotEmpty()
+        }.getOrDefault(false)
+
+        if (nativeResolved) {
+            return true
+        }
+
+        val fallbackResponse = app.get(episodeUrl, referer = "$mainUrl/")
+        val fallbackDocument = runCatching { fallbackResponse.document }.getOrElse {
+            Jsoup.parse(fallbackResponse.text, episodeUrl)
+        }
+        extractFromDocument(fallbackDocument)
+        extractFromText(fallbackResponse.text)
         return emitted.isNotEmpty()
     }
 
@@ -324,6 +494,12 @@ class Kuramanime : MainAPI() {
         return fixed.substringBefore("/episode/").substringBefore("/batch/")
     }
 
+    private fun parseJsEnv(jsBody: String): Map<String, String> {
+        return Regex("""([A-Z_]+)\s*:\s*['"]([^'"]+)['"]""")
+            .findAll(jsBody)
+            .associate { it.groupValues[1] to it.groupValues[2] }
+    }
+
     private fun getType(typeLabel: String?): TvType {
         return when {
             typeLabel.isNullOrBlank() -> TvType.Anime
@@ -331,5 +507,9 @@ class Kuramanime : MainAPI() {
             typeLabel.contains("ova", true) || typeLabel.contains("special", true) -> TvType.OVA
             else -> TvType.Anime
         }
+    }
+
+    private companion object {
+        const val SECURE_AUTHORIZATION = "qDBDmoKgQIdP6wmFGUCDo3vuVg9FBfV98"
     }
 }
