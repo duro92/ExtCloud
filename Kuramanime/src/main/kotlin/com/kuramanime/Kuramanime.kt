@@ -110,7 +110,7 @@ class Kuramanime : MainAPI() {
             else -> ShowStatus.Completed
         }
         val tvType = getType(typeText)
-        val episodes = extractEpisodes(document)
+        val episodes = extractEpisodes(fixedUrl, document)
         val trailer = document.selectFirst("iframe[src*=\"youtube.com\"], iframe[src*=\"youtu.be\"]")
             ?.attr("src")
 
@@ -483,32 +483,50 @@ class Kuramanime : MainAPI() {
         }
     }
 
-    private fun extractEpisodes(document: Document): List<Episode> {
+    private suspend fun extractEpisodes(seriesUrl: String, firstDocument: Document): List<Episode> {
         val episodeLinks = linkedMapOf<String, Pair<String, Int?>>()
-        val popoverHtml = document.selectFirst("#episodeLists")?.attr("data-content").orEmpty()
-        if (popoverHtml.isNotBlank()) {
-            val popoverDoc = Jsoup.parseBodyFragment(popoverHtml)
-            popoverDoc.select("a[href*=/episode/]").forEach { anchor ->
-                val href = fixUrl(anchor.attr("href"))
-                val episode = Regex("Ep\\s*(\\d+)", RegexOption.IGNORE_CASE)
-                    .find(anchor.text())
-                    ?.groupValues
-                    ?.getOrNull(1)
-                    ?.toIntOrNull()
-                if (!episodeLinks.containsKey(href)) {
-                    episodeLinks[href] = anchor.text().trim() to episode
-                }
+        val pendingPages = ArrayDeque<String>()
+        val visitedPages = linkedSetOf<String>()
+        pendingPages.add(seriesUrl)
+
+        fun addEpisodeAnchor(anchor: Element) {
+            val href = fixUrl(anchor.attr("href"))
+            val episode = Regex("Ep\\s*(\\d+)", RegexOption.IGNORE_CASE)
+                .find(anchor.text())
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toIntOrNull()
+                ?: Regex("/episode/(\\d+)").find(href)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            if (!episodeLinks.containsKey(href)) {
+                episodeLinks[href] = anchor.text().trim() to episode
             }
         }
 
-        if (episodeLinks.isEmpty()) {
-            document.select("a.ep-button[href*=/episode/]").forEach { anchor ->
-                val href = fixUrl(anchor.attr("href"))
-                val episode = Regex("/episode/(\\d+)").find(href)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                if (!episodeLinks.containsKey(href)) {
-                    episodeLinks[href] = anchor.text().trim() to episode
+        fun collectFromDocument(document: Document) {
+            val popoverHtml = document.selectFirst("#episodeLists")?.attr("data-content").orEmpty()
+            if (popoverHtml.isNotBlank()) {
+                val popoverDoc = Jsoup.parseBodyFragment(popoverHtml)
+                popoverDoc.select("a[href*=/episode/]").forEach(::addEpisodeAnchor)
+                popoverDoc.select("a[href*='?page=']").forEach { anchor ->
+                    val pageUrl = fixUrl(anchor.attr("href"))
+                    if (!visitedPages.contains(pageUrl) && !pendingPages.contains(pageUrl)) {
+                        pendingPages.add(pageUrl)
+                    }
                 }
             }
+
+            document.select("a.ep-button[href*=/episode/]").forEach(::addEpisodeAnchor)
+        }
+
+        while (pendingPages.isNotEmpty() && visitedPages.size < 64) {
+            val pageUrl = pendingPages.removeFirst()
+            if (!visitedPages.add(pageUrl)) continue
+            val document = if (pageUrl == seriesUrl) {
+                firstDocument
+            } else {
+                app.get(pageUrl).document
+            }
+            collectFromDocument(document)
         }
 
         return episodeLinks.map { (href, info) ->
