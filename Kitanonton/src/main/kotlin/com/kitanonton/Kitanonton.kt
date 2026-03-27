@@ -2,8 +2,13 @@ package com.kitanonton
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
+import com.lagradost.cloudstream3.USER_AGENT
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import java.net.URI
 import java.net.URLEncoder
 import java.util.Base64
 import org.jsoup.nodes.Document
@@ -156,6 +161,7 @@ class Kitanonton : MainAPI() {
         candidates.distinct().forEach { encoded ->
             val decoded = decodeIframe(encoded) ?: return@forEach
             val target = normalizeTargetUrl(decoded, referer) ?: return@forEach
+            if (extractJuicyCodes(target, referer, callback)) return@forEach
             runCatching {
                 loadExtractor(target, referer, subtitleCallback, callback)
             }
@@ -223,6 +229,111 @@ class Kitanonton : MainAPI() {
         }.getOrNull() ?: url
     }
 
+    private suspend fun extractJuicyCodes(
+        embedUrl: String,
+        referer: String,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        val page = runCatching {
+            app.get(embedUrl, referer = referer, timeout = 60).text
+        }.getOrNull() ?: return false
+
+        if (!page.contains("_juicycodes(", true)) return false
+
+        val payloadExpression =
+            Regex("""_juicycodes\(([^<]+)\)""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .find(page)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?: return false
+
+        val payload =
+            Regex(""""([^"]*)"""")
+                .findAll(payloadExpression)
+                .joinToString("") { it.groupValues[1] }
+                .ifBlank { return false }
+
+        val decodedJs = decodeJuicyPayload(payload) ?: return false
+        val sourceBlock =
+            Regex(
+                """"sources"\s*:\s*\{(.*?)\}\s*,\s*(?:"abouttext"|"sharing")""",
+                setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+            ).find(decodedJs)?.groupValues?.getOrNull(1)
+                ?: return false
+
+        val streamUrl =
+            Regex(""""file"\s*:\s*"([^"]+)"""", RegexOption.IGNORE_CASE)
+                .find(sourceBlock)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.unescapeJsUrl()
+                ?.let(::fixUrl)
+                ?: return false
+
+        val headers =
+            mapOf(
+                "Referer" to embedUrl,
+                "Origin" to getOrigin(embedUrl),
+                "User-Agent" to USER_AGENT,
+            )
+
+        if (streamUrl.contains(".m3u8", true)) {
+            M3u8Helper.generateM3u8(name, streamUrl, embedUrl, headers = headers).forEach(callback)
+        } else {
+            callback(
+                newExtractorLink(
+                    source = name,
+                    name = name,
+                    url = streamUrl,
+                    type = ExtractorLinkType.VIDEO
+                ) {
+                    this.referer = embedUrl
+                    this.headers = headers
+                }
+            )
+        }
+
+        return true
+    }
+
+    private fun decodeJuicyPayload(payload: String): String? {
+        if (payload.length < 4) return null
+
+        val salt =
+            payload.takeLast(3)
+                .map { (it.code - 100).toString() }
+                .joinToString("")
+                .toIntOrNull()
+                ?: return null
+
+        val body = payload.dropLast(3)
+        val normalized = body.replace('_', '+').replace('-', '/').padBase64()
+        val step =
+            runCatching { String(Base64.getDecoder().decode(normalized)) }
+                .getOrNull()
+                ?: return null
+
+        val symbols = listOf('`', '%', '-', '+', '*', '$', '!', '_', '^', '=')
+        val digits =
+            buildString {
+                step.forEach { ch ->
+                    val idx = symbols.indexOf(ch)
+                    if (idx >= 0) append(idx)
+                }
+            }
+
+        if (digits.length < 4) return null
+
+        return buildString {
+            digits.chunked(4).forEach { chunk ->
+                if (chunk.length == 4) {
+                    val code = (chunk.toIntOrNull()?.rem(1000) ?: return@forEach) - salt
+                    append(code.toChar())
+                }
+            }
+        }
+    }
+
     private fun buildEpisodeData(referer: String, encodings: List<String>): String {
         return episodeDataPrefix +
             encodeMetaValue(referer) +
@@ -238,6 +349,15 @@ class Kitanonton : MainAPI() {
         return runCatching {
             String(Base64.getUrlDecoder().decode(value))
         }.getOrDefault(value)
+    }
+
+    private fun String.padBase64(): String {
+        val pad = (4 - (length % 4)) % 4
+        return this + "=".repeat(pad)
+    }
+
+    private fun String.unescapeJsUrl(): String {
+        return replace("\\/", "/")
     }
 
     private fun buildPagedUrl(url: String, page: Int): String {
@@ -326,5 +446,11 @@ class Kitanonton : MainAPI() {
                     ?.getOrNull(1)
                 ?: Regex("""(\d+)""").find(text)?.groupValues?.getOrNull(1)
         )?.toIntOrNull()
+    }
+
+    private fun getOrigin(url: String): String {
+        return runCatching {
+            URI(url).let { "${it.scheme}://${it.host}" }
+        }.getOrDefault(mainUrl)
     }
 }
