@@ -31,6 +31,7 @@ class Kitanonton : MainAPI() {
         )
 
     private val episodeDataPrefix = "kitanonton-episode::"
+    private val episodeRefererSeparator = "::ref::"
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get(buildPagedUrl(request.data, page), timeout = 60).document
@@ -126,23 +127,37 @@ class Kitanonton : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
-        val candidates =
-            if (data.startsWith(episodeDataPrefix)) {
-                data.removePrefix(episodeDataPrefix)
-                    .split("||")
-                    .map { it.trim() }
-                    .filter { it.isNotBlank() }
-            } else {
-                val document = app.get(data, timeout = 60).document
-                collectEncodedIframes(document)
-            }
+        val referer: String
+        val candidates: List<String>
+
+        if (data.startsWith(episodeDataPrefix)) {
+            val payload = data.removePrefix(episodeDataPrefix)
+            val parts = payload.split(episodeRefererSeparator, limit = 2)
+            referer =
+                parts.firstOrNull()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let(::decodeMetaValue)
+                    ?.takeIf { it.startsWith("http") }
+                    ?: mainUrl
+            candidates =
+                parts.getOrNull(1)
+                    ?.split("||")
+                    ?.map { it.trim() }
+                    ?.filter { it.isNotBlank() }
+                    .orEmpty()
+        } else {
+            referer = if (data.startsWith("http")) data else mainUrl
+            val document = app.get(data, timeout = 60).document
+            candidates = collectEncodedIframes(document)
+        }
 
         if (candidates.isEmpty()) return false
 
         candidates.distinct().forEach { encoded ->
             val decoded = decodeIframe(encoded) ?: return@forEach
+            val target = normalizeTargetUrl(decoded, referer) ?: return@forEach
             runCatching {
-                loadExtractor(decoded, data, subtitleCallback, callback)
+                loadExtractor(target, referer, subtitleCallback, callback)
             }
         }
 
@@ -161,7 +176,7 @@ class Kitanonton : MainAPI() {
             val fallbacks = collectEncodedIframes(watchDocument)
             if (fallbacks.isEmpty()) return emptyList()
             return listOf(
-                newEpisode(episodeDataPrefix + fallbacks.joinToString("||")) {
+                newEpisode(buildEpisodeData(watchUrl, fallbacks)) {
                     name = "Episode 1"
                     season = seasonNumber
                     episode = 1
@@ -177,7 +192,7 @@ class Kitanonton : MainAPI() {
         }
 
         return grouped.entries.map { (episodeNumber, encodings) ->
-            newEpisode(episodeDataPrefix + encodings.distinct().joinToString("||")) {
+            newEpisode(buildEpisodeData(watchUrl, encodings.distinct())) {
                 name = "Episode $episodeNumber"
                 season = seasonNumber
                 episode = episodeNumber
@@ -199,6 +214,30 @@ class Kitanonton : MainAPI() {
             ?.trim()
             ?.takeIf { it.startsWith("http://") || it.startsWith("https://") || it.startsWith("//") }
             ?.let { fixUrl(it) }
+    }
+
+    private suspend fun normalizeTargetUrl(url: String, referer: String): String? {
+        if (!url.contains("short.icu", true)) return url
+        return runCatching {
+            app.get(url, referer = referer, allowRedirects = true, timeout = 30).url
+        }.getOrNull() ?: url
+    }
+
+    private fun buildEpisodeData(referer: String, encodings: List<String>): String {
+        return episodeDataPrefix +
+            encodeMetaValue(referer) +
+            episodeRefererSeparator +
+            encodings.joinToString("||")
+    }
+
+    private fun encodeMetaValue(value: String): String {
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(value.toByteArray())
+    }
+
+    private fun decodeMetaValue(value: String): String {
+        return runCatching {
+            String(Base64.getUrlDecoder().decode(value))
+        }.getOrDefault(value)
     }
 
     private fun buildPagedUrl(url: String, page: Int): String {
