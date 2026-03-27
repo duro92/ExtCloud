@@ -35,6 +35,7 @@ class Kitanonton : MainAPI() {
         )
 
     private val episodeDataPrefix = "kitanonton-episode::"
+    private val candidateDataPrefix = "kitanonton-link::"
     private val episodeRefererSeparator = "::ref::"
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -152,17 +153,16 @@ class Kitanonton : MainAPI() {
         } else {
             referer = if (data.startsWith("http")) data else mainUrl
             val document = app.get(data, timeout = 60).document
-            candidates = collectEncodedIframes(document)
+            candidates = collectServerTargets(document, referer, isSeries = false)
         }
 
         if (candidates.isEmpty()) return false
 
         candidates.distinct().forEach { encoded ->
-            val decoded = decodeIframe(encoded) ?: return@forEach
-            val target = normalizeTargetUrl(decoded, referer) ?: return@forEach
-            if (extractJuicyCodes(target, referer, callback)) return@forEach
+            val (target, targetReferer) = resolveCandidateTarget(encoded, referer) ?: return@forEach
+            if (extractJuicyCodes(target, targetReferer, callback)) return@forEach
             runCatching {
-                loadExtractor(target, referer, subtitleCallback, callback)
+                loadExtractor(target, targetReferer, subtitleCallback, callback)
             }
         }
 
@@ -178,7 +178,7 @@ class Kitanonton : MainAPI() {
 
         val episodeLinks = watchDocument.select("#list-eps a.btn-eps[data-iframe], a.btn-eps[data-iframe]")
         if (episodeLinks.isEmpty()) {
-            val fallbacks = collectEncodedIframes(watchDocument)
+            val fallbacks = collectServerTargets(watchDocument, watchUrl, isSeries = true)
             if (fallbacks.isEmpty()) return emptyList()
             return listOf(
                 newEpisode(buildEpisodeData(watchUrl, fallbacks)) {
@@ -192,8 +192,11 @@ class Kitanonton : MainAPI() {
         val grouped = linkedMapOf<Int, MutableList<String>>()
         episodeLinks.forEach { anchor ->
             val episodeNumber = extractEpisodeNumber(anchor.text(), anchor.id()) ?: return@forEach
-            val encoded = anchor.attr("data-iframe").trim().takeIf { it.isNotBlank() } ?: return@forEach
-            grouped.getOrPut(episodeNumber) { mutableListOf() }.add(encoded)
+            val candidate =
+                anchor.toServerTarget(watchUrl, isSeries = true)
+                    ?: anchor.attr("data-iframe").trim().takeIf { it.isNotBlank() }
+                    ?: return@forEach
+            grouped.getOrPut(episodeNumber) { mutableListOf() }.add(candidate)
         }
 
         return grouped.entries.map { (episodeNumber, encodings) ->
@@ -211,6 +214,18 @@ class Kitanonton : MainAPI() {
             .distinct()
     }
 
+    private fun collectServerTargets(
+        document: Document,
+        referer: String,
+        isSeries: Boolean,
+    ): List<String> {
+        val wrappedTargets =
+            document.select(".server[onclick], a.btn-eps[onclick]")
+                .mapNotNull { it.toServerTarget(referer, isSeries) }
+                .distinct()
+        return if (wrappedTargets.isNotEmpty()) wrappedTargets else collectEncodedIframes(document)
+    }
+
     private fun decodeIframe(encoded: String): String? {
         return runCatching {
             String(Base64.getDecoder().decode(encoded.trim()))
@@ -219,6 +234,39 @@ class Kitanonton : MainAPI() {
             ?.trim()
             ?.takeIf { it.startsWith("http://") || it.startsWith("https://") || it.startsWith("//") }
             ?.let { fixUrl(it) }
+    }
+
+    private suspend fun resolveCandidateTarget(
+        candidate: String,
+        fallbackReferer: String,
+    ): Pair<String, String>? {
+        val decodedCandidate = decodeCandidateData(candidate)
+        val rawUrl = decodedCandidate?.first ?: candidate
+        val initialReferer = decodedCandidate?.second ?: fallbackReferer
+        val directUrl =
+            if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
+                rawUrl
+            } else {
+                decodeIframe(rawUrl)
+            } ?: return null
+        val normalized = normalizeTargetUrl(directUrl, initialReferer) ?: return null
+
+        if (isKitanontonWrapper(normalized)) {
+            val wrapperDocument =
+                runCatching {
+                    app.get(normalized, referer = initialReferer, timeout = 60).document
+                }.getOrNull() ?: return null
+            val iframeUrl =
+                wrapperDocument.selectFirst("iframe[src]")
+                    ?.attr("src")
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let(::fixUrl)
+                    ?: return null
+            return iframeUrl to normalized
+        }
+
+        return normalized to initialReferer
     }
 
     private suspend fun normalizeTargetUrl(url: String, referer: String): String? {
@@ -325,6 +373,37 @@ class Kitanonton : MainAPI() {
         return true
     }
 
+    private fun Element.toServerTarget(referer: String, isSeries: Boolean): String? {
+        val onclick = attr("onclick").trim()
+        val match =
+            Regex("""load_(?:movie|episode)_iframe\((\d+),\s*(\d+)\)""", RegexOption.IGNORE_CASE)
+                .find(onclick)
+                ?: return null
+        val serverType = match.groupValues.getOrNull(1)?.toIntOrNull() ?: return null
+        val source =
+            when (serverType) {
+                10, 8 -> attr("data-drive")
+                7 -> attr("data-mp4")
+                6 -> attr("data-strgo")
+                2 -> attr("data-iframe")
+                1 -> attr("data-openload")
+                else -> attr("data-iframe")
+            }.trim().takeIf { it.isNotBlank() } ?: return null
+
+        val wrapperBase =
+            when (serverType) {
+                10 -> if (isSeries) "$mainUrl/googledrive/?type=series&source=" else "$mainUrl/googledrive/?source="
+                8 -> if (isSeries) "$mainUrl/gdrive/?type=series&url=" else "$mainUrl/gdrive/?url="
+                7 -> if (isSeries) "$mainUrl/player/?type=series&source=" else "$mainUrl/player/?source="
+                6 -> if (isSeries) "$mainUrl/stremagoembed/?type=series&source=" else "$mainUrl/stremagoembed/?source="
+                2 -> "$mainUrl/iembed/?source="
+                1 -> if (isSeries) "$mainUrl/openloadembed/?type=series&source=" else "$mainUrl/openloadembed/?source="
+                else -> null
+            } ?: return null
+
+        return encodeCandidateData(wrapperBase + source, referer)
+    }
+
     private fun decodeJuicyPayload(payload: String): String? {
         if (payload.length < 4) return null
 
@@ -368,6 +447,22 @@ class Kitanonton : MainAPI() {
             encodeMetaValue(referer) +
             episodeRefererSeparator +
             encodings.joinToString("||")
+    }
+
+    private fun encodeCandidateData(url: String, referer: String): String {
+        return candidateDataPrefix +
+            encodeMetaValue(url) +
+            episodeRefererSeparator +
+            encodeMetaValue(referer)
+    }
+
+    private fun decodeCandidateData(value: String): Pair<String, String>? {
+        if (!value.startsWith(candidateDataPrefix)) return null
+        val payload = value.removePrefix(candidateDataPrefix)
+        val parts = payload.split(episodeRefererSeparator, limit = 2)
+        val url = parts.firstOrNull()?.let(::decodeMetaValue)?.takeIf { it.startsWith("http") } ?: return null
+        val referer = parts.getOrNull(1)?.let(::decodeMetaValue)?.takeIf { it.startsWith("http") } ?: mainUrl
+        return url to referer
     }
 
     private fun encodeMetaValue(value: String): String {
@@ -481,6 +576,12 @@ class Kitanonton : MainAPI() {
         return runCatching {
             URI(url).let { "${it.scheme}://${it.host}" }
         }.getOrDefault(mainUrl)
+    }
+
+    private fun isKitanontonWrapper(url: String): Boolean {
+        if (!url.startsWith(mainUrl, true)) return false
+        return listOf("/iembed/", "/player/", "/gdrive/", "/googledrive/", "/openloadembed/", "/stremagoembed/")
+            .any { url.contains(it, true) }
     }
 
     private fun juicyPageHeaders(referer: String): Map<String, String> {
