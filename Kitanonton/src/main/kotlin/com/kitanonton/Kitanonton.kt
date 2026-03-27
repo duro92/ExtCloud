@@ -279,6 +279,14 @@ class Kitanonton : MainAPI() {
                 ?.unescapeJsUrl()
                 ?.let(::fixUrl)
                 ?: return false
+        val sourceType =
+            Regex(""""type"\s*:\s*"([^"]+)"""", RegexOption.IGNORE_CASE)
+                .find(sourceBlock)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.trim()
+                ?.lowercase()
+        val isHls = sourceType == "hls" || streamUrl.contains(".m3u8", true)
 
         val headers =
             mapOf(
@@ -288,7 +296,7 @@ class Kitanonton : MainAPI() {
                 "User-Agent" to juicyUserAgent,
             )
 
-        if (streamUrl.contains(".m3u8", true)) {
+        if (isHls) {
             callback(
                 newExtractorLink(
                     source = name,
