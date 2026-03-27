@@ -19,7 +19,7 @@ class Kitanonton : MainAPI() {
     override var lang = "id"
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
-    private val juicyUserAgent = "Mozilla/5.0"
+    private val juicyUserAgent = USER_AGENT
 
     override val mainPage =
         mainPageOf(
@@ -340,15 +340,16 @@ class Kitanonton : MainAPI() {
             mapOf(
                 "Referer" to embedUrl,
                 "Origin" to getOrigin(embedUrl),
-                "Accept" to "*/*",
+                "Accept" to "application/vnd.apple.mpegurl, application/x-mpegURL, */*",
                 "User-Agent" to juicyUserAgent,
             )
+        val linkName = buildMirrorName(embedUrl, streamUrl)
 
         if (isHls) {
             callback(
                 newExtractorLink(
                     source = name,
-                    name = name,
+                    name = linkName,
                     url = streamUrl,
                     type = ExtractorLinkType.M3U8
                 ) {
@@ -360,7 +361,7 @@ class Kitanonton : MainAPI() {
             callback(
                 newExtractorLink(
                     source = name,
-                    name = name,
+                    name = linkName,
                     url = streamUrl,
                     type = ExtractorLinkType.VIDEO
                 ) {
@@ -576,6 +577,19 @@ class Kitanonton : MainAPI() {
         return runCatching {
             URI(url).let { "${it.scheme}://${it.host}" }
         }.getOrDefault(mainUrl)
+    }
+
+    private fun buildMirrorName(embedUrl: String, streamUrl: String): String {
+        val embedHost = runCatching { URI(embedUrl).host }.getOrNull().orEmpty()
+        val streamHost = runCatching { URI(streamUrl).host }.getOrNull().orEmpty()
+        val label =
+            when {
+                streamHost.isNotBlank() -> streamHost
+                embedHost.isNotBlank() -> embedHost
+                else -> name
+            }
+                .removePrefix("www.")
+        return if (label.equals(name, true) || label.isBlank()) name else "$name [$label]"
     }
 
     private fun isKitanontonWrapper(url: String): Boolean {
