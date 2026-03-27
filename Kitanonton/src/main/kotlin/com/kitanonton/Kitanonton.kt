@@ -2,10 +2,8 @@ package com.kitanonton
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
-import com.lagradost.cloudstream3.USER_AGENT
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.net.URI
@@ -21,6 +19,7 @@ class Kitanonton : MainAPI() {
     override var lang = "id"
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
+    private val juicyUserAgent = "Mozilla/5.0"
 
     override val mainPage =
         mainPageOf(
@@ -225,7 +224,13 @@ class Kitanonton : MainAPI() {
     private suspend fun normalizeTargetUrl(url: String, referer: String): String? {
         if (!url.contains("short.icu", true)) return url
         return runCatching {
-            app.get(url, referer = referer, allowRedirects = true, timeout = 30).url
+            app.get(
+                url,
+                referer = referer,
+                headers = juicyPageHeaders(referer),
+                allowRedirects = true,
+                timeout = 30
+            ).url
         }.getOrNull() ?: url
     }
 
@@ -235,7 +240,12 @@ class Kitanonton : MainAPI() {
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
         val page = runCatching {
-            app.get(embedUrl, referer = referer, timeout = 60).text
+            app.get(
+                embedUrl,
+                referer = referer,
+                headers = juicyPageHeaders(referer),
+                timeout = 60
+            ).text
         }.getOrNull() ?: return false
 
         if (!page.contains("_juicycodes(", true)) return false
@@ -274,11 +284,22 @@ class Kitanonton : MainAPI() {
             mapOf(
                 "Referer" to embedUrl,
                 "Origin" to getOrigin(embedUrl),
-                "User-Agent" to USER_AGENT,
+                "Accept" to "*/*",
+                "User-Agent" to juicyUserAgent,
             )
 
         if (streamUrl.contains(".m3u8", true)) {
-            M3u8Helper.generateM3u8(name, streamUrl, embedUrl, headers = headers).forEach(callback)
+            callback(
+                newExtractorLink(
+                    source = name,
+                    name = name,
+                    url = streamUrl,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = embedUrl
+                    this.headers = headers
+                }
+            )
         } else {
             callback(
                 newExtractorLink(
@@ -452,5 +473,13 @@ class Kitanonton : MainAPI() {
         return runCatching {
             URI(url).let { "${it.scheme}://${it.host}" }
         }.getOrDefault(mainUrl)
+    }
+
+    private fun juicyPageHeaders(referer: String): Map<String, String> {
+        return mapOf(
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Referer" to referer,
+            "User-Agent" to juicyUserAgent,
+        )
     }
 }
