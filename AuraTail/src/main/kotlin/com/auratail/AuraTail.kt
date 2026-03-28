@@ -68,9 +68,10 @@ class AuraTail : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url).document
-
-        val title =
+        val response = app.get(url)
+        val document = response.document
+        val rawHtml = response.text
+        val pageTitle =
             document
                 .selectFirst("h1.entry-title")
                 ?.text()
@@ -84,11 +85,28 @@ class AuraTail : MainAPI() {
                 ?.replace(Regex("\\s+"), " ")
                 ?.trim()
                 .orEmpty()
+        val seriesMeta = extractSeriesMeta(rawHtml)
+        val isEpisodePage =
+            url.contains("-episode-", true) ||
+                Regex("\\bEpisode\\s+\\d+\\b", RegexOption.IGNORE_CASE).containsMatchIn(pageTitle)
+
+        val title =
+            if (isEpisodePage) {
+                seriesMeta?.seriesTitle ?: pageTitle.removeEpisodeSuffix()
+            } else {
+                pageTitle
+            }
         val poster =
-            document
-                .selectFirst("div.bigcontent img")
-                ?.getImageAttr()
-                ?.let { fixUrlNull(it) }
+            seriesMeta?.posterUrl
+                ?: document
+                    .selectFirst("div.bigcontent img, div.thumb img, .thumb img, meta[property=og:image]")
+                    ?.let { element ->
+                        if (element.tagName().equals("meta", true)) {
+                            fixUrlNull(element.attr("content"))
+                        } else {
+                            element.getImageAttr().let { fixUrlNull(it) }
+                        }
+                    }
 
         val description =
             document
@@ -124,7 +142,7 @@ class AuraTail : MainAPI() {
             }
 
         val typeText = document.selectFirst("span:matchesOwn(Tipe:)")?.ownText()?.trim()
-        val type = getType(typeText)
+        val type = if (isEpisodePage) TvType.Anime else getType(typeText)
 
         val tags = document.select("div.genxed a").map { it.text() }
         val actors = document.select("span:has(b:matchesOwn(Artis:)) a").map { it.text().trim() }
@@ -162,21 +180,13 @@ class AuraTail : MainAPI() {
                 ActorData(actor = actor, roleString = charRole, voiceActor = voiceActor)
             }
 
-        val episodeElements = document.select("div.eplister ul li a")
-        val episodes =
-            episodeElements
-                .reversed()
-                .mapIndexed { index, anchor ->
-                    val href = fixUrl(anchor.attr("href"))
-                    newEpisode(href) {
-                        name = "Episode ${index + 1}"
-                        episode = index + 1
-                    }
-                }
+        val episodes = buildEpisodes(document, isEpisodePage)
 
         val altTitles =
             listOfNotNull(
                 title,
+                pageTitle.takeIf { it.isNotBlank() && !it.equals(title, true) }?.removeEpisodeSuffix(),
+                seriesMeta?.seriesTitle,
                 document.selectFirst("span:matchesOwn(Judul Inggris:)")?.ownText()?.trim(),
                 document.selectFirst("span:matchesOwn(Judul Jepang:)")?.ownText()?.trim(),
                 document.selectFirst("span:matchesOwn(Judul Asli:)")?.ownText()?.trim(),
@@ -345,6 +355,85 @@ class AuraTail : MainAPI() {
             else -> true
         }
     }
+
+    private fun buildEpisodes(
+        document: org.jsoup.nodes.Document,
+        isEpisodePage: Boolean,
+    ): List<Episode> {
+        val selectors =
+            if (isEpisodePage) {
+                "#singlepisode .episodelist ul li a[href], div.episodelist ul li a[href], div.eplister ul li a[href]"
+            } else {
+                "div.eplister ul li a[href], #singlepisode .episodelist ul li a[href]"
+            }
+
+        val episodeAnchors = document.select(selectors)
+        return episodeAnchors
+            .mapNotNull { anchor ->
+                val href = fixUrl(anchor.attr("href"))
+                if (href.isBlank()) return@mapNotNull null
+
+                val rawTitle =
+                    anchor.selectFirst("h3, h4")?.text()?.trim()
+                        ?: anchor.attr("title").trim().takeIf { it.isNotBlank() }
+                        ?: anchor.text().trim()
+                val episodeNumber =
+                    Regex("\\b(?:Episode|Eps?|Ep)\\s*(\\d+)\\b", RegexOption.IGNORE_CASE)
+                        .find(rawTitle)
+                        ?.groupValues
+                        ?.getOrNull(1)
+                        ?.toIntOrNull()
+                        ?: Regex("-episode-(\\d+)", RegexOption.IGNORE_CASE)
+                            .find(href)
+                            ?.groupValues
+                            ?.getOrNull(1)
+                            ?.toIntOrNull()
+                val name =
+                    rawTitle.ifBlank {
+                        episodeNumber?.let { "Episode $it" } ?: "Episode"
+                    }
+
+                newEpisode(href) {
+                    this.name = name
+                    this.episode = episodeNumber
+                }
+            }.distinctBy { it.data }
+            .sortedBy { it.episode ?: Int.MAX_VALUE }
+    }
+
+    private fun extractSeriesMeta(html: String): SeriesMeta? {
+        val match =
+            Regex(
+                """item":\{"mid":\d+,"cid":\d+,"c":"([^"]+)","s":"([^"]+)","t":"([^"]+)"""",
+                RegexOption.IGNORE_CASE,
+            ).find(html)
+                ?: return null
+        return SeriesMeta(
+            currentEpisode = match.groupValues[1],
+            seriesTitle = match.groupValues[2].unescapeJsString().removeEpisodeSuffix(),
+            posterUrl = fixUrlNull(match.groupValues[3].unescapeJsString()),
+        )
+    }
+
+    private fun String.unescapeJsString(): String {
+        return replace("\\/", "/")
+            .replace("\\u002F", "/")
+            .replace("\\u003A", ":")
+            .replace("\\\"", "\"")
+    }
+
+    private fun String.removeEpisodeSuffix(): String {
+        return replace(
+            Regex("\\s+Episode\\s+\\d+\\b.*$", RegexOption.IGNORE_CASE),
+            "",
+        ).trim()
+    }
+
+    private data class SeriesMeta(
+        val currentEpisode: String?,
+        val seriesTitle: String,
+        val posterUrl: String?,
+    )
 
     private fun Element.getImageAttr(): String {
         return when {
