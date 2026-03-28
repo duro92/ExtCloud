@@ -43,14 +43,22 @@ class AuraTail : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "anime/?status=&type=&order=update" to "Update Terbaru",
-        "anime/?sub=&order=latest" to "Baru Ditambahkan",
-        "anime/?status=&type=&order=popular" to "Terpopuler",
+        "page/%d/" to "Update Terbaru",
+        "page/%d/" to "Movie",
+        "page/%d/" to "TV Series",
+        "page/%d/" to "ONA",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val document = app.get("$mainUrl/${request.data}&page=$page").document
-        val items = document.select("div.listupd article.bs").mapNotNull { it.toSearchResult() }
+        val document = app.get(fixUrl(request.data.format(page))).document
+        val items =
+            document
+                .select("div.listupd article.bs")
+                .mapNotNull { card ->
+                    val type = getType(card.selectFirst(".typez, .limit .type, span.type")?.text()?.trim())
+                    if (!matchesMainPage(request.name, type)) return@mapNotNull null
+                    card.toSearchResult()
+                }
         return newHomePageResponse(request.name, items)
     }
 
@@ -292,9 +300,15 @@ class AuraTail : MainAPI() {
                 ).replace(Regex("\\s+"), " ")
                 .trim()
         val poster = selectFirst("img")?.getImageAttr()?.let { fixUrlNull(it) }
-        val typeText = selectFirst(".typez, .limit .type, span.type")?.text()?.trim()
-        return newAnimeSearchResponse(cleanTitle, fixUrl(link), getType(typeText)) {
-            posterUrl = poster
+        val type = getType(selectFirst(".typez, .limit .type, span.type")?.text()?.trim())
+        val href = fixUrl(link)
+        return when (type) {
+            TvType.AnimeMovie -> newMovieSearchResponse(cleanTitle, href, type) {
+                posterUrl = poster
+            }
+            else -> newAnimeSearchResponse(cleanTitle, href, type) {
+                posterUrl = poster
+            }
         }
     }
 
@@ -312,9 +326,23 @@ class AuraTail : MainAPI() {
                 .trim()
         val href = selectFirst("a")?.attr("href") ?: return null
         val posterUrl = selectFirst("img")?.getImageAttr()?.let { fixUrlNull(it) }
-        val typeText = selectFirst(".typez, .limit .type, span.type")?.text()?.trim()
-        return newAnimeSearchResponse(cleanTitle, fixUrl(href), getType(typeText)) {
-            this.posterUrl = posterUrl
+        val type = getType(selectFirst(".typez, .limit .type, span.type")?.text()?.trim())
+        return when (type) {
+            TvType.AnimeMovie -> newMovieSearchResponse(cleanTitle, fixUrl(href), type) {
+                this.posterUrl = posterUrl
+            }
+            else -> newAnimeSearchResponse(cleanTitle, fixUrl(href), type) {
+                this.posterUrl = posterUrl
+            }
+        }
+    }
+
+    private fun matchesMainPage(sectionName: String, type: TvType): Boolean {
+        return when (sectionName) {
+            "Movie" -> type == TvType.AnimeMovie
+            "TV Series" -> type == TvType.Anime
+            "ONA" -> type == TvType.OVA
+            else -> true
         }
     }
 
