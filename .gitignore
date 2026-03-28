@@ -24,3 +24,5 @@ gradle-app.setting
 local.properties
 .vscodetest.txt
 .gradle-user-home/
+_apk_freereels/
+.tmp_freereels/
