@@ -25,7 +25,7 @@ import javax.crypto.spec.SecretKeySpec
 class FreeReels : MainAPI() {
     override var mainUrl = buildMainUrl()
     private val apiUrl = buildApiBaseUrl()
-    override var name = "FreeReels"
+    override var name = "FreeReels🤒"
     override var lang = "id"
     override val hasMainPage = true
     override val hasQuickSearch = true
