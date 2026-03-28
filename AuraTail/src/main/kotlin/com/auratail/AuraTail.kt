@@ -12,7 +12,7 @@ import org.jsoup.nodes.Element
 
 class AuraTail : MainAPI() {
     override var mainUrl = "https://auratail.vip"
-    override var name = "AuraTail"
+    override var name = "AuraTail😕"
     override val hasMainPage = true
     override var lang = "id"
 
@@ -46,7 +46,6 @@ class AuraTail : MainAPI() {
         "page/%d/" to "Update Terbaru",
         "page/%d/" to "Movie",
         "page/%d/" to "TV Series",
-        "page/%d/" to "ONA",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
