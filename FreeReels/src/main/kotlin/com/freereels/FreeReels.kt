@@ -225,18 +225,12 @@ class FreeReels : MainAPI() {
             if (mediaUrl.isBlank() || !seen.add(mediaUrl)) return
 
             hasLinks = true
-            val linkType = if (mediaUrl.contains(".m3u8", true)) {
-                ExtractorLinkType.M3U8
-            } else {
-                ExtractorLinkType.VIDEO
-            }
-
             callback.invoke(
                 newExtractorLink(
                     source = "$name $label",
                     name = "$name $label",
                     url = mediaUrl,
-                    type = linkType
+                    type = ExtractorLinkType.VIDEO
                 ) {
                     this.headers = headers
                     this.referer = "$mainUrl/"
