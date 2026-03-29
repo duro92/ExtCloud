@@ -24,8 +24,9 @@ import javax.crypto.spec.SecretKeySpec
 
 class FreeReels : MainAPI() {
     override var mainUrl = buildMainUrl()
-    private val apiUrl = buildApiBaseUrl()
-    override var name = "FreeReels🤒"
+    private val apiUrl = buildH5ApiBaseUrl()
+    private val nativeApiUrl = buildNativeApiBaseUrl()
+    override var name = "FreeReels"
     override var lang = "id"
     override val hasMainPage = true
     override val hasQuickSearch = true
@@ -33,50 +34,56 @@ class FreeReels : MainAPI() {
     override val supportedTypes = setOf(TvType.TvSeries, TvType.AsianDrama)
 
     override val mainPage = mainPageOf(
-        "featured" to "Featured",
-        "popular" to "Popular",
+        "popular" to "Populer",
+        "new" to "New",
+        "coming_soon" to "Segera Hadir",
+        "dubbing" to "Dubbing",
+        "female" to "Perempuan",
+        "male" to "Laki-Laki",
+        "anime" to "Anime",
     )
 
     private val secureRandom = SecureRandom()
     private val cryptoKey = "2r36789f45q01ae5"
+    private val nativeLoginSalt = "8IAcbWyCsVhYv82S2eofRqK1DF3nNDAv"
     private val authSalt = "8IAcbWyCsVhYv82S2eofRqK1DF3nNDAv&"
     private var deviceId = randomDeviceId()
-    private var session: Session? = null
+    private val deviceBrand = "Redmi"
+    private val deviceModel = "23090RA98G"
+    private val deviceManufacturer = "Xiaomi"
+    private val deviceProduct = "sky"
+    private val deviceFingerprint = "Redmi/sky_global/sky:14/UKQ1.231003.002/V816.0.11.0.UMWMIXM:user/release-keys"
+    private val sessionId = java.util.UUID.randomUUID().toString()
+    private var h5Session: Session? = null
+    private var nativeSession: Session? = null
+    private val nativeCategories = listOf(
+        NativeCategory("popular", "Populer", "993", 10000),
+        NativeCategory("new", "New", "995", 10000),
+        NativeCategory("coming_soon", "Segera Hadir", "1004", 10000, isComingSoon = true),
+        NativeCategory("dubbing", "Dubbing", "1002", 10000),
+        NativeCategory("female", "Perempuan", "994", 10000),
+        NativeCategory("male", "Laki-Laki", "996", 10000),
+        NativeCategory("anime", "Anime", "1005", 10001),
+    )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val safePage = page.coerceAtLeast(1)
-        val tab = getPrimaryTab()
-        val moduleResponse = getModuleIndex(tab)
-
-        val items = when (request.data) {
-            "featured" -> if (safePage == 1) {
-                moduleResponse.items
-                    .firstOrNull { it.type.equals("banner", true) }
-                    ?.items
-                    .orEmpty()
-            } else {
-                emptyList()
-            }
-
-            else -> getPopularItemsForPage(safePage, moduleResponse)
-        }.mapNotNull { it.toSearchResult() }
-            .distinctBy { it.url }
-
-        val hasMore = when (request.data) {
-            "featured" -> false
-            else -> if (safePage == 1) {
-                moduleResponse.pageInfo?.hasMore ?: items.isNotEmpty()
-            } else {
-                fetchFeedPage(moduleResponse.getRecommendModuleKey(), safePage, moduleResponse.pageInfo?.next)
-                    ?.pageInfo
-                    ?.hasMore
-                    ?: false
-            }
+        if (page > 1) {
+            return newHomePageResponse(
+                HomePageList(request.name, emptyList()),
+                hasNext = false
+            )
         }
+
+        val category = nativeCategories.firstOrNull { it.key == request.data }
+            ?: throw ErrorLoadingException("Kategori FreeReels tidak ditemukan")
+
+        val items = getCategoryItems(category)
+            .mapNotNull { it.toSearchResult() }
+            .distinctBy { it.url }
 
         return newHomePageResponse(
             HomePageList(request.name, items),
-            hasNext = hasMore
+            hasNext = false
         )
     }
 
@@ -84,14 +91,12 @@ class FreeReels : MainAPI() {
         val keyword = query.trim()
         if (keyword.isBlank()) return emptyList()
 
-        val tab = getPrimaryTab()
-        val moduleResponse = getModuleIndex(tab)
         val candidates = LinkedHashMap<String, HomeItem>()
         val normalizedKeyword = keyword.lowercase()
         val suggestedTerms = buildList {
             add(keyword)
             addAll(
-                getKeywordSuggestions(keyword)
+                getNativeKeywordSuggestions(keyword)
                     .mapNotNull { it.keyword?.trim() }
                     .filter { it.isNotBlank() }
                     .take(10)
@@ -99,31 +104,15 @@ class FreeReels : MainAPI() {
         }.distinct()
         val normalizedTerms = suggestedTerms.map { it.lowercase() }
 
-        fun addItems(items: List<HomeItem>) {
+        fun addItems(items: Iterable<HomeItem>) {
             items.forEach { item ->
                 val key = item.key?.trim().orEmpty()
                 if (key.isNotBlank()) candidates.putIfAbsent(key, item)
             }
         }
 
-        addItems(moduleResponse.items.flatMap { it.items.orEmpty() })
-
-        val recommendModuleKey = moduleResponse.getRecommendModuleKey()
-        var next = moduleResponse.pageInfo?.next
-        var hasMore = moduleResponse.pageInfo?.hasMore ?: false
-        var scannedPages = 0
-
-        while (scannedPages < 10 && hasMore && !recommendModuleKey.isNullOrBlank()) {
-            val feed = getFeedItems(recommendModuleKey, next).data ?: break
-            addItems(feed.items.orEmpty())
-            next = feed.pageInfo?.next
-            hasMore = feed.pageInfo?.hasMore ?: false
-            scannedPages++
-
-            val currentMatches = candidates.values.count { item ->
-                normalizedTerms.maxOfOrNull { term -> item.searchScore(term) } ?: 0 > 0
-            }
-            if (currentMatches >= 25 && scannedPages >= 3) break
+        nativeCategories.forEach { category ->
+            addItems(getCategoryItems(category))
         }
 
         return candidates.values
@@ -158,8 +147,8 @@ class FreeReels : MainAPI() {
         val detail = getDramaInfo(seriesKey).data?.info
             ?: throw ErrorLoadingException("Detail FreeReels tidak ditemukan")
 
-        val title = detail.name?.takeIf { it.isNotBlank() }
-            ?: localTitle
+        val title = localTitle
+            ?: detail.name?.takeIf { it.isNotBlank() }
             ?: "FreeReels"
 
         val episodes = detail.episodeList.orEmpty()
@@ -193,13 +182,13 @@ class FreeReels : MainAPI() {
 
         return newTvSeriesLoadResponse(
             title,
-            buildSeriesUrl(seriesKey, title, detail.cover ?: localPoster, detail.desc ?: localPlot, detail.allTags()),
+            buildSeriesUrl(seriesKey, title, detail.cover ?: localPoster, localPlot ?: detail.desc, localTags ?: detail.allTags()),
             TvType.AsianDrama,
             episodes
         ) {
             posterUrl = detail.cover ?: localPoster
-            plot = detail.desc ?: localPlot
-            tags = detail.allTags().ifEmpty { localTags }.orEmpty()
+            plot = localPlot ?: detail.desc
+            tags = localTags ?: detail.allTags()
             showStatus = detail.finishStatus.toShowStatus()
         }
     }
@@ -294,6 +283,40 @@ class FreeReels : MainAPI() {
             }
 
         return hasLinks
+    }
+
+    private suspend fun getCategoryItems(category: NativeCategory): List<HomeItem> {
+        return if (category.isComingSoon) {
+            getComingSoonItems()
+        } else {
+            getNativeModuleIndex(category).items
+                .flatMap { it.items.orEmpty() }
+        }
+    }
+
+    private suspend fun getNativeModuleIndex(category: NativeCategory): ModuleIndexData {
+        val query = linkedMapOf(
+            "tab_key" to category.tabKey,
+            "position_index" to category.positionIndex.toString(),
+        )
+        val body = nativeApiGet("/homepage/v2/tab/index", query)
+        return tryParseJson<ModuleIndexResponse>(body)?.data
+            ?: throw ErrorLoadingException("Respons kategori FreeReels tidak valid")
+    }
+
+    private suspend fun getComingSoonItems(): List<HomeItem> {
+        val body = nativeApiGet("/coming-soon/list")
+        return tryParseJson<ComingSoonResponse>(body)?.data?.items
+            .orEmpty()
+            .flatMap { it.items.orEmpty() }
+    }
+
+    private suspend fun getNativeKeywordSuggestions(keyword: String): List<SearchKeyword> {
+        val body = nativeApiPost(
+            path = "/search/keywords",
+            body = SearchKeywordRequest(keyword)
+        )
+        return tryParseJson<SearchKeywordResponse>(body)?.data?.keywords.orEmpty()
     }
 
     private suspend fun getPrimaryTab(): HomeTab {
@@ -396,13 +419,13 @@ class FreeReels : MainAPI() {
             executeRequest(method, url, body)
         }.getOrElse { error ->
             if (!allowRetry) throw error
-            session = null
+            h5Session = null
             executeRequest(method, url, body)
         }
     }
 
     private suspend fun executeRequest(method: String, url: String, body: Any?): String {
-        val requestHeaders = buildHeaders(authenticated = body !is AnonymousLoginRequest)
+        val requestHeaders = buildH5Headers(authenticated = body !is AnonymousLoginRequest)
         val response = when (method.uppercase()) {
             "POST" -> {
                 val payload = body?.let { encrypt(it.toJson()) }.orEmpty()
@@ -424,13 +447,13 @@ class FreeReels : MainAPI() {
     }
 
     private suspend fun ensureSession(): Session {
-        session?.let { return it }
+        h5Session?.let { return it }
 
         val url = buildApiUrl("/h5-api/anonymous/login")
         val payload = AnonymousLoginRequest(deviceId)
         val response = app.post(
             url,
-            headers = buildHeaders(authenticated = false),
+            headers = buildH5Headers(authenticated = false),
             requestBody = encrypt(payload.toJson()).toRequestBody("application/json".toMediaType())
         )
         val body = decryptIfNeeded(response.text.trim())
@@ -442,10 +465,10 @@ class FreeReels : MainAPI() {
         val authSecret = data.authSecret?.takeIf { it.isNotBlank() }
             ?: throw ErrorLoadingException("auth_secret kosong")
 
-        return Session(authKey, authSecret).also { session = it }
+        return Session(authKey, authSecret).also { h5Session = it }
     }
 
-    private suspend fun buildHeaders(authenticated: Boolean): Map<String, String> {
+    private suspend fun buildH5Headers(authenticated: Boolean): Map<String, String> {
         val sessionData = if (authenticated) ensureSession() else null
         val authKey = sessionData?.authKey ?: "undefined"
         val authSecret = sessionData?.authSecret ?: "undefined"
@@ -465,7 +488,123 @@ class FreeReels : MainAPI() {
         )
     }
 
+    private suspend fun nativeApiGet(path: String, query: Map<String, String?> = emptyMap()): String {
+        val url = buildUrl(nativeApiUrl, path, query)
+        return nativeApiRequest("GET", url, null)
+    }
+
+    private suspend fun nativeApiPost(path: String, body: Any): String {
+        val url = buildUrl(nativeApiUrl, path)
+        return nativeApiRequest("POST", url, body)
+    }
+
+    private suspend fun nativeApiRequest(
+        method: String,
+        url: String,
+        body: Any?,
+        allowRetry: Boolean = true
+    ): String {
+        return runCatching {
+            executeNativeRequest(method, url, body)
+        }.getOrElse { error ->
+            if (!allowRetry) throw error
+            nativeSession = null
+            executeNativeRequest(method, url, body)
+        }
+    }
+
+    private suspend fun executeNativeRequest(method: String, url: String, body: Any?): String {
+        val authenticated = !url.contains("/anonymous/login")
+        val requestHeaders = buildNativeHeaders(authenticated)
+        val response = when (method.uppercase()) {
+            "POST" -> app.post(
+                url,
+                headers = requestHeaders,
+                requestBody = body?.toJson().orEmpty().toRequestBody("application/json".toMediaType())
+            )
+
+            else -> app.get(url, headers = requestHeaders)
+        }
+
+        val text = response.text.trim()
+        if (response.code !in 200..299) {
+            throw ErrorLoadingException("HTTP ${response.code}: ${text.take(160)}")
+        }
+        return text
+    }
+
+    private suspend fun ensureNativeSession(): Session {
+        nativeSession?.let { return it }
+
+        val response = app.post(
+            buildUrl(nativeApiUrl, "/anonymous/login"),
+            headers = buildNativeHeaders(authenticated = false),
+            requestBody = NativeAnonymousLoginRequest(
+                deviceId = deviceId,
+                deviceName = "$deviceBrand $deviceModel",
+                sign = md5("$nativeLoginSalt$deviceId")
+            ).toJson().toRequestBody("application/json".toMediaType())
+        )
+        val body = response.text.trim()
+        val parsed = tryParseJson<AnonymousLoginResponse>(body)
+            ?: throw ErrorLoadingException("Login native FreeReels gagal")
+        val data = parsed.data
+        val authKey = data?.authKey?.takeIf { it.isNotBlank() }
+            ?: throw ErrorLoadingException("auth_key native kosong")
+        val authSecret = data.authSecret?.takeIf { it.isNotBlank() }
+            ?: throw ErrorLoadingException("auth_secret native kosong")
+
+        return Session(authKey, authSecret).also { nativeSession = it }
+    }
+
+    private suspend fun buildNativeHeaders(authenticated: Boolean): Map<String, String> {
+        val sessionData = if (authenticated) ensureNativeSession() else null
+        val headers = linkedMapOf(
+            "Accept" to "application/json",
+            "Content-Type" to "application/json",
+            "OpCountryCode" to "ID",
+            "X-AppEngine-Country" to "ID",
+            "app-language" to "id",
+            "prefer_country" to "ID",
+            "locale" to "id-ID",
+            "language" to "id-ID",
+            "country" to "ID",
+            "X-Timezone" to "Asia/Jakarta",
+            "timezone" to "7",
+            "X-Timezone-offset" to "7",
+            "network-type" to "WIFI",
+            "screen-width" to "411",
+            "screen-height" to "891",
+            "is-mainland" to "false",
+            "device-memory" to "8.00",
+            "device-country" to "ID",
+            "device-language" to "id-ID",
+            "x-device-model" to deviceModel,
+            "x-device-manufacturer" to deviceManufacturer,
+            "x-device-brand" to deviceBrand,
+            "x-device-product" to deviceProduct,
+            "x-device-fingerprint" to deviceFingerprint,
+            "session-id" to sessionId,
+            "app-name" to "com.freereels.app",
+            "app-version" to "2.2.40",
+            "device-id" to deviceId,
+            "device-version" to "34",
+            "device" to "android",
+        )
+
+        if (authenticated) {
+            headers["Authorization"] =
+                "oauth_signature=${md5("$authSalt${sessionData?.authSecret.orEmpty()}")},oauth_token=${sessionData?.authKey.orEmpty()},ts=${System.currentTimeMillis()}"
+        }
+
+        return headers
+    }
+
     private fun buildApiUrl(path: String, query: Map<String, String?> = emptyMap()): String {
+        return buildUrl(apiUrl, path, query)
+    }
+
+    private fun buildUrl(baseUrl: String, path: String, query: Map<String, String?> = emptyMap()): String {
         val trimmedPath = if (path.startsWith("/")) path else "/$path"
         val normalizedQuery = query
             .filterValues { it != null }
@@ -473,9 +612,9 @@ class FreeReels : MainAPI() {
             .joinToString("&")
 
         return if (normalizedQuery.isBlank()) {
-            "$apiUrl$trimmedPath"
+            "$baseUrl$trimmedPath"
         } else {
-            "$apiUrl$trimmedPath?$normalizedQuery"
+            "$baseUrl$trimmedPath?$normalizedQuery"
         }
     }
 
@@ -533,10 +672,19 @@ class FreeReels : MainAPI() {
         return decodeCodes(codes)
     }
 
-    private fun buildApiBaseUrl(): String {
+    private fun buildH5ApiBaseUrl(): String {
         val codes = intArrayOf(
             104, 116, 116, 112, 115, 58, 47, 47,
             97, 112, 105, 46, 109, 121, 100, 114, 97, 109, 97, 119, 97, 118, 101, 46, 99, 111, 109
+        )
+        return decodeCodes(codes)
+    }
+
+    private fun buildNativeApiBaseUrl(): String {
+        val codes = intArrayOf(
+            104, 116, 116, 112, 115, 58, 47, 47,
+            97, 112, 105, 118, 50, 46, 102, 114, 101, 101, 45, 114, 101, 101, 108, 115, 46, 99, 111, 109,
+            47, 102, 114, 118, 50, 45, 97, 112, 105
         )
         return decodeCodes(codes)
     }
@@ -654,6 +802,12 @@ class FreeReels : MainAPI() {
         @JsonProperty("device_id") val deviceId: String,
     )
 
+    data class NativeAnonymousLoginRequest(
+        @JsonProperty("device_id") val deviceId: String,
+        @JsonProperty("device_name") val deviceName: String,
+        @JsonProperty("sign") val sign: String,
+    )
+
     data class AnonymousLoginResponse(
         @JsonProperty("data") val data: AuthData? = null,
     )
@@ -679,6 +833,14 @@ class FreeReels : MainAPI() {
 
     data class ModuleIndexResponse(
         @JsonProperty("data") val data: ModuleIndexData? = null,
+    )
+
+    data class ComingSoonResponse(
+        @JsonProperty("data") val data: ComingSoonData? = null,
+    )
+
+    data class ComingSoonData(
+        @JsonProperty("items") val items: List<HomeModule>? = null,
     )
 
     data class ModuleIndexData(
@@ -795,5 +957,13 @@ class FreeReels : MainAPI() {
         @JsonProperty("m3u8Url") val m3u8Url: String? = null,
         @JsonProperty("videoUrl") val videoUrl: String? = null,
         @JsonProperty("subtitles") val subtitles: List<DramaSubtitle>? = null,
+    )
+
+    data class NativeCategory(
+        val key: String,
+        val title: String,
+        val tabKey: String,
+        val positionIndex: Int,
+        val isComingSoon: Boolean = false,
     )
 }
