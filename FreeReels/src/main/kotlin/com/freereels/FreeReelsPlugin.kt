@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 @CloudstreamPlugin
 class FreeReelsPlugin : Plugin() {
     override fun load(context: android.content.Context) {
+        FreeReels.context = context
         registerMainAPI(FreeReels())
     }
 }

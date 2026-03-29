@@ -1,5 +1,6 @@
 package com.freereels
 
+import android.content.Context
 import android.util.Base64
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
@@ -13,6 +14,8 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.newSubtitleFile
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.File
+import java.net.URI
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.security.MessageDigest
@@ -22,6 +25,10 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 class FreeReels : MainAPI() {
+    companion object {
+        var context: Context? = null
+    }
+
     override var mainUrl = buildMainUrl()
     private val apiUrl = buildH5ApiBaseUrl()
     private val nativeApiUrl = buildNativeApiBaseUrl()
@@ -225,12 +232,22 @@ class FreeReels : MainAPI() {
             if (mediaUrl.isBlank() || !seen.add(mediaUrl)) return
 
             hasLinks = true
+            val resolvedUrl = if (mediaUrl.contains(".m3u8", true)) {
+                buildSingleVariantPlaylist(mediaUrl, headers, label) ?: mediaUrl
+            } else {
+                mediaUrl
+            }
+            val linkType = if (resolvedUrl.contains(".m3u8", true)) {
+                ExtractorLinkType.M3U8
+            } else {
+                ExtractorLinkType.VIDEO
+            }
             callback.invoke(
                 newExtractorLink(
                     source = "$name $label",
                     name = "$name $label",
-                    url = mediaUrl,
-                    type = ExtractorLinkType.VIDEO
+                    url = resolvedUrl,
+                    type = linkType
                 ) {
                     this.headers = headers
                     this.referer = "$mainUrl/"
@@ -268,6 +285,112 @@ class FreeReels : MainAPI() {
             }
 
         return hasLinks
+    }
+
+    private suspend fun buildSingleVariantPlaylist(
+        manifestUrl: String,
+        headers: Map<String, String>,
+        label: String
+    ): String? {
+        return runCatching {
+            val manifest = app.get(manifestUrl, headers = headers).text
+            val rewritten = rewriteMasterPlaylist(manifestUrl, manifest)
+            val cacheDir = context?.cacheDir ?: return null
+            val directory = File(cacheDir, "freereels_hls").apply { mkdirs() }
+            val file = File(directory, "${md5("$label|$manifestUrl")}.m3u8")
+            file.writeText(rewritten)
+            file.toURI().toString()
+        }.getOrNull()
+    }
+
+    private fun rewriteMasterPlaylist(baseUrl: String, playlist: String): String {
+        val lines = playlist.replace("\r", "").lines()
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+        if (lines.none { it.startsWith("#EXT-X-STREAM-INF") }) {
+            throw ErrorLoadingException("Manifest FreeReels bukan master playlist")
+        }
+
+        val mediaLines = mutableListOf<String>()
+        val variants = mutableListOf<HlsVariant>()
+        val headerLines = mutableListOf<String>()
+        var pendingStream: String? = null
+
+        lines.forEach { line ->
+            when {
+                line == "#EXTM3U" -> Unit
+                line.startsWith("#EXT-X-MEDIA", true) -> mediaLines += line
+                line.startsWith("#EXT-X-STREAM-INF", true) -> pendingStream = line
+                pendingStream != null && !line.startsWith("#") -> {
+                    variants += HlsVariant(
+                        streamInfo = pendingStream!!,
+                        url = resolvePlaylistUrl(baseUrl, line),
+                        audioGroup = extractQuotedAttribute(pendingStream!!, "AUDIO"),
+                        height = extractResolutionHeight(pendingStream!!),
+                        bandwidth = extractIntAttribute(pendingStream!!, "BANDWIDTH")
+                    )
+                    pendingStream = null
+                }
+                line.startsWith("#EXT-X-VERSION", true) || line.startsWith("#EXT-X-INDEPENDENT-SEGMENTS", true) -> {
+                    headerLines += line
+                }
+            }
+        }
+
+        val selectedVariant = variants.maxWithOrNull(
+            compareBy<HlsVariant> { it.height ?: 0 }
+                .thenBy { it.bandwidth ?: 0 }
+        ) ?: throw ErrorLoadingException("Variant FreeReels tidak ditemukan")
+
+        val selectedAudioLines = mediaLines
+            .filter { it.contains("TYPE=AUDIO", true) }
+            .filter {
+                val groupId = extractQuotedAttribute(it, "GROUP-ID")
+                selectedVariant.audioGroup.isNullOrBlank() || groupId == selectedVariant.audioGroup
+            }
+            .ifEmpty { emptyList() }
+            .map { absolutizeMediaUri(baseUrl, it) }
+
+        return buildString {
+            appendLine("#EXTM3U")
+            headerLines.distinct().forEach { appendLine(it) }
+            selectedAudioLines.forEach { appendLine(it) }
+            appendLine(selectedVariant.streamInfo)
+            appendLine(selectedVariant.url)
+        }
+    }
+
+    private fun resolvePlaylistUrl(baseUrl: String, url: String): String {
+        return runCatching { URI(baseUrl).resolve(url).toString() }.getOrElse { url }
+    }
+
+    private fun absolutizeMediaUri(baseUrl: String, line: String): String {
+        val mediaUri = extractQuotedAttribute(line, "URI") ?: return line
+        val absoluteUri = resolvePlaylistUrl(baseUrl, mediaUri)
+        return line.replace("URI=\"$mediaUri\"", "URI=\"$absoluteUri\"")
+    }
+
+    private fun extractQuotedAttribute(line: String, key: String): String? {
+        return Regex("""$key="([^"]+)"""", RegexOption.IGNORE_CASE)
+            .find(line)
+            ?.groupValues
+            ?.getOrNull(1)
+    }
+
+    private fun extractIntAttribute(line: String, key: String): Int? {
+        return Regex("""$key=(\d+)""", RegexOption.IGNORE_CASE)
+            .find(line)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
+    }
+
+    private fun extractResolutionHeight(line: String): Int? {
+        return Regex("""RESOLUTION=\d+x(\d+)""", RegexOption.IGNORE_CASE)
+            .find(line)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
     }
 
     private suspend fun getCategoryItems(category: NativeCategory): List<HomeItem> {
@@ -950,5 +1073,13 @@ class FreeReels : MainAPI() {
         val tabKey: String,
         val positionIndex: Int,
         val isComingSoon: Boolean = false,
+    )
+
+    data class HlsVariant(
+        val streamInfo: String,
+        val url: String,
+        val audioGroup: String?,
+        val height: Int?,
+        val bandwidth: Int?,
     )
 }
