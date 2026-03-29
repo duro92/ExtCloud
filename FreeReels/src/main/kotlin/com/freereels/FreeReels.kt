@@ -1,6 +1,5 @@
 package com.freereels
 
-import android.content.Context
 import android.util.Base64
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
@@ -14,8 +13,6 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.newSubtitleFile
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.io.File
-import java.net.URI
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.security.MessageDigest
@@ -25,10 +22,6 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 class FreeReels : MainAPI() {
-    companion object {
-        var context: Context? = null
-    }
-
     override var mainUrl = buildMainUrl()
     private val apiUrl = buildH5ApiBaseUrl()
     private val nativeApiUrl = buildNativeApiBaseUrl()
@@ -150,52 +143,98 @@ class FreeReels : MainAPI() {
             ?.filter { it.isNotBlank() }
             ?.takeIf { it.isNotEmpty() }
 
+        val nativeItem = findNativeItemBySeriesKey(seriesKey)
         val detail = getDramaInfo(seriesKey).data?.info
+
+        if (detail != null) {
+            val title = localTitle
+                ?: detail.name?.takeIf { it.isNotBlank() }
+                ?: "FreeReels"
+
+            val episodes = detail.episodeList.orEmpty()
+                .sortedBy { it.index ?: Int.MAX_VALUE }
+                .mapIndexed { index, episode ->
+                    val episodeNumber = episode.index ?: index + 1
+                    val episodeName = episode.name
+                        ?.takeIf { it.isNotBlank() && !it.equals(title, true) }
+                        ?: "Episode $episodeNumber"
+
+                    newEpisode(
+                        EpisodeLoadData(
+                            seriesKey = seriesKey,
+                            episodeId = episode.id,
+                            episodeNumber = episodeNumber,
+                            episodeName = episodeName,
+                            h264Url = episode.externalAudioH264M3u8,
+                            h265Url = episode.externalAudioH265M3u8,
+                            m3u8Url = episode.m3u8Url,
+                            videoUrl = episode.videoUrl,
+                            subtitles = episode.subtitleList.orEmpty()
+                        ).toJson()
+                    ) {
+                        name = episodeName
+                        this.episode = episodeNumber
+                        this.posterUrl = episode.cover
+                    }
+                }
+
+            if (episodes.isNotEmpty()) {
+                return newTvSeriesLoadResponse(
+                    title,
+                    buildSeriesUrl(seriesKey, title, detail.cover ?: localPoster, localPlot ?: detail.desc, localTags ?: detail.allTags()),
+                    TvType.AsianDrama,
+                    episodes
+                ) {
+                    posterUrl = detail.cover ?: localPoster
+                    plot = localPlot ?: detail.desc
+                    tags = localTags ?: detail.allTags()
+                    showStatus = detail.finishStatus.toShowStatus()
+                }
+            }
+        }
+
+        val fallbackEpisode = nativeItem?.episodeInfo
             ?: throw ErrorLoadingException("Detail FreeReels tidak ditemukan")
-
-        val title = localTitle
-            ?: detail.name?.takeIf { it.isNotBlank() }
+        val fallbackTitle = localTitle
+            ?: nativeItem?.title?.takeIf { it.isNotBlank() }
+            ?: fallbackEpisode.name?.takeIf { it.isNotBlank() }
             ?: "FreeReels"
+        val fallbackPlot = localPlot ?: nativeItem?.desc
+        val fallbackPoster = fallbackEpisode.cover ?: nativeItem?.cover ?: localPoster
+        val fallbackTags = localTags ?: nativeItem?.allTags().orEmpty()
+        val fallbackEpisodeNumber = fallbackEpisode.index ?: 1
+        val fallbackEpisodeName = fallbackEpisode.name
+            ?.takeIf { it.isNotBlank() && !it.equals(fallbackTitle, true) }
+            ?: "Episode $fallbackEpisodeNumber"
 
-        val episodes = detail.episodeList.orEmpty()
-            .sortedBy { it.index ?: Int.MAX_VALUE }
-            .mapIndexed { index, episode ->
-                val episodeNumber = episode.index ?: index + 1
-                val episodeName = episode.name
-                    ?.takeIf { it.isNotBlank() && !it.equals(title, true) }
-                    ?: "Episode $episodeNumber"
-
+        return newTvSeriesLoadResponse(
+            fallbackTitle,
+            buildSeriesUrl(seriesKey, fallbackTitle, fallbackPoster, fallbackPlot, fallbackTags),
+            TvType.AsianDrama,
+            listOf(
                 newEpisode(
                     EpisodeLoadData(
                         seriesKey = seriesKey,
-                        episodeId = episode.id,
-                        episodeNumber = episodeNumber,
-                        episodeName = episodeName,
-                        h264Url = episode.externalAudioH264M3u8,
-                        h265Url = episode.externalAudioH265M3u8,
-                        m3u8Url = episode.m3u8Url,
-                        videoUrl = episode.videoUrl,
-                        subtitles = episode.subtitleList.orEmpty()
+                        episodeId = fallbackEpisode.id,
+                        episodeNumber = fallbackEpisodeNumber,
+                        episodeName = fallbackEpisodeName,
+                        h264Url = fallbackEpisode.externalAudioH264M3u8,
+                        h265Url = fallbackEpisode.externalAudioH265M3u8,
+                        m3u8Url = fallbackEpisode.m3u8Url,
+                        videoUrl = fallbackEpisode.videoUrl,
+                        subtitles = fallbackEpisode.subtitleList.orEmpty()
                     ).toJson()
                 ) {
-                    name = episodeName
-                    this.episode = episodeNumber
-                    this.posterUrl = episode.cover
+                    name = fallbackEpisodeName
+                    episode = fallbackEpisodeNumber
+                    posterUrl = fallbackPoster
                 }
-            }
-
-        if (episodes.isEmpty()) throw ErrorLoadingException("Episode tidak ditemukan")
-
-        return newTvSeriesLoadResponse(
-            title,
-            buildSeriesUrl(seriesKey, title, detail.cover ?: localPoster, localPlot ?: detail.desc, localTags ?: detail.allTags()),
-            TvType.AsianDrama,
-            episodes
+            )
         ) {
-            posterUrl = detail.cover ?: localPoster
-            plot = localPlot ?: detail.desc
-            tags = localTags ?: detail.allTags()
-            showStatus = detail.finishStatus.toShowStatus()
+            posterUrl = fallbackPoster
+            plot = fallbackPlot
+            tags = fallbackTags
+            showStatus = ShowStatus.Ongoing
         }
     }
 
@@ -232,12 +271,7 @@ class FreeReels : MainAPI() {
             if (mediaUrl.isBlank() || !seen.add(mediaUrl)) return
 
             hasLinks = true
-            val resolvedUrl = if (mediaUrl.contains(".m3u8", true)) {
-                buildSingleVariantPlaylist(mediaUrl, headers, label) ?: mediaUrl
-            } else {
-                mediaUrl
-            }
-            val linkType = if (resolvedUrl.contains(".m3u8", true)) {
+            val linkType = if (mediaUrl.contains(".m3u8", true)) {
                 ExtractorLinkType.M3U8
             } else {
                 ExtractorLinkType.VIDEO
@@ -246,7 +280,7 @@ class FreeReels : MainAPI() {
                 newExtractorLink(
                     source = "$name $label",
                     name = "$name $label",
-                    url = resolvedUrl,
+                    url = mediaUrl,
                     type = linkType
                 ) {
                     this.headers = headers
@@ -287,110 +321,12 @@ class FreeReels : MainAPI() {
         return hasLinks
     }
 
-    private suspend fun buildSingleVariantPlaylist(
-        manifestUrl: String,
-        headers: Map<String, String>,
-        label: String
-    ): String? {
-        return runCatching {
-            val manifest = app.get(manifestUrl, headers = headers).text
-            val rewritten = rewriteMasterPlaylist(manifestUrl, manifest)
-            val cacheDir = context?.cacheDir ?: return null
-            val directory = File(cacheDir, "freereels_hls").apply { mkdirs() }
-            val file = File(directory, "${md5("$label|$manifestUrl")}.m3u8")
-            file.writeText(rewritten)
-            file.toURI().toString()
-        }.getOrNull()
-    }
-
-    private fun rewriteMasterPlaylist(baseUrl: String, playlist: String): String {
-        val lines = playlist.replace("\r", "").lines()
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-        if (lines.none { it.startsWith("#EXT-X-STREAM-INF") }) {
-            throw ErrorLoadingException("Manifest FreeReels bukan master playlist")
+    private suspend fun findNativeItemBySeriesKey(seriesKey: String): HomeItem? {
+        for (category in nativeCategories) {
+            val match = getCategoryItems(category).firstOrNull { it.key == seriesKey }
+            if (match != null) return match
         }
-
-        val mediaLines = mutableListOf<String>()
-        val variants = mutableListOf<HlsVariant>()
-        val headerLines = mutableListOf<String>()
-        var pendingStream: String? = null
-
-        lines.forEach { line ->
-            when {
-                line == "#EXTM3U" -> Unit
-                line.startsWith("#EXT-X-MEDIA", true) -> mediaLines += line
-                line.startsWith("#EXT-X-STREAM-INF", true) -> pendingStream = line
-                pendingStream != null && !line.startsWith("#") -> {
-                    variants += HlsVariant(
-                        streamInfo = pendingStream!!,
-                        url = resolvePlaylistUrl(baseUrl, line),
-                        audioGroup = extractQuotedAttribute(pendingStream!!, "AUDIO"),
-                        height = extractResolutionHeight(pendingStream!!),
-                        bandwidth = extractIntAttribute(pendingStream!!, "BANDWIDTH")
-                    )
-                    pendingStream = null
-                }
-                line.startsWith("#EXT-X-VERSION", true) || line.startsWith("#EXT-X-INDEPENDENT-SEGMENTS", true) -> {
-                    headerLines += line
-                }
-            }
-        }
-
-        val selectedVariant = variants.maxWithOrNull(
-            compareBy<HlsVariant> { it.height ?: 0 }
-                .thenBy { it.bandwidth ?: 0 }
-        ) ?: throw ErrorLoadingException("Variant FreeReels tidak ditemukan")
-
-        val selectedAudioLines = mediaLines
-            .filter { it.contains("TYPE=AUDIO", true) }
-            .filter {
-                val groupId = extractQuotedAttribute(it, "GROUP-ID")
-                selectedVariant.audioGroup.isNullOrBlank() || groupId == selectedVariant.audioGroup
-            }
-            .ifEmpty { emptyList() }
-            .map { absolutizeMediaUri(baseUrl, it) }
-
-        return buildString {
-            appendLine("#EXTM3U")
-            headerLines.distinct().forEach { appendLine(it) }
-            selectedAudioLines.forEach { appendLine(it) }
-            appendLine(selectedVariant.streamInfo)
-            appendLine(selectedVariant.url)
-        }
-    }
-
-    private fun resolvePlaylistUrl(baseUrl: String, url: String): String {
-        return runCatching { URI(baseUrl).resolve(url).toString() }.getOrElse { url }
-    }
-
-    private fun absolutizeMediaUri(baseUrl: String, line: String): String {
-        val mediaUri = extractQuotedAttribute(line, "URI") ?: return line
-        val absoluteUri = resolvePlaylistUrl(baseUrl, mediaUri)
-        return line.replace("URI=\"$mediaUri\"", "URI=\"$absoluteUri\"")
-    }
-
-    private fun extractQuotedAttribute(line: String, key: String): String? {
-        return Regex("""$key="([^"]+)"""", RegexOption.IGNORE_CASE)
-            .find(line)
-            ?.groupValues
-            ?.getOrNull(1)
-    }
-
-    private fun extractIntAttribute(line: String, key: String): Int? {
-        return Regex("""$key=(\d+)""", RegexOption.IGNORE_CASE)
-            .find(line)
-            ?.groupValues
-            ?.getOrNull(1)
-            ?.toIntOrNull()
-    }
-
-    private fun extractResolutionHeight(line: String): Int? {
-        return Regex("""RESOLUTION=\d+x(\d+)""", RegexOption.IGNORE_CASE)
-            .find(line)
-            ?.groupValues
-            ?.getOrNull(1)
-            ?.toIntOrNull()
+        return null
     }
 
     private suspend fun getCategoryItems(category: NativeCategory): List<HomeItem> {
@@ -861,16 +797,20 @@ class FreeReels : MainAPI() {
         tags: List<String>? = null,
     ): String {
         val params = mutableListOf<String>()
+        params.add("id=${encodeQuery(seriesKey)}")
         title?.takeIf { it.isNotBlank() }?.let { params.add("title=${encodeQuery(it)}") }
         poster?.takeIf { it.isNotBlank() }?.let { params.add("poster=${encodeQuery(it)}") }
         plot?.takeIf { it.isNotBlank() }?.let { params.add("plot=${encodeQuery(it)}") }
         tags?.takeIf { it.isNotEmpty() }?.let { params.add("tags=${encodeQuery(it.joinToString("|"))}") }
-        val suffix = if (params.isEmpty()) "" else "?${params.joinToString("&")}"
-        return "freereels://series/$seriesKey$suffix"
+        return "$mainUrl/detail?${params.joinToString("&")}"
     }
 
     private fun extractSeriesKey(url: String): String {
-        return url.substringAfter("series/").substringBefore("?").ifBlank {
+        return getQueryParam(url, "id").orEmpty().ifBlank {
+            getQueryParam(url, "series_key").orEmpty()
+        }.ifBlank {
+            url.substringAfter("series/").substringBefore("?")
+        }.ifBlank {
             url.substringAfter("freereels://").substringBefore("?").substringBefore("/")
         }.ifBlank {
             url.substringAfterLast("/").substringBefore("?")
@@ -1075,11 +1015,4 @@ class FreeReels : MainAPI() {
         val isComingSoon: Boolean = false,
     )
 
-    data class HlsVariant(
-        val streamInfo: String,
-        val url: String,
-        val audioGroup: String?,
-        val height: Int?,
-        val bandwidth: Int?,
-    )
 }
