@@ -8,7 +8,6 @@ import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.newSubtitleFile
@@ -226,22 +225,18 @@ class FreeReels : MainAPI() {
             if (mediaUrl.isBlank() || !seen.add(mediaUrl)) return
 
             hasLinks = true
-            if (mediaUrl.contains(".m3u8", true)) {
-                M3u8Helper.generateM3u8(
-                    "$name $label",
-                    mediaUrl,
-                    referer = "$mainUrl/",
-                    headers = headers
-                ).forEach(callback)
-                return
+            val linkType = if (mediaUrl.contains(".m3u8", true)) {
+                ExtractorLinkType.M3U8
+            } else {
+                ExtractorLinkType.VIDEO
             }
 
             callback.invoke(
                 newExtractorLink(
-                    source = name,
+                    source = "$name $label",
                     name = "$name $label",
                     url = mediaUrl,
-                    type = ExtractorLinkType.VIDEO
+                    type = linkType
                 ) {
                     this.headers = headers
                     this.referer = "$mainUrl/"
@@ -252,8 +247,6 @@ class FreeReels : MainAPI() {
 
         emit("H264", loadData.h264Url)
         emit("H265", loadData.h265Url)
-        emit("M3U8", loadData.m3u8Url)
-        emit("Video", loadData.videoUrl)
 
         if (hasLinks) return true
 
@@ -266,8 +259,6 @@ class FreeReels : MainAPI() {
 
         emit("H264", episode.externalAudioH264M3u8)
         emit("H265", episode.externalAudioH265M3u8)
-        emit("M3U8", episode.m3u8Url)
-        emit("Video", episode.videoUrl)
 
         episode.subtitleList.orEmpty()
             .distinctBy { it.vtt ?: it.subtitle ?: "${it.language}:${it.displayName}" }
