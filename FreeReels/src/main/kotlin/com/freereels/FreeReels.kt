@@ -25,7 +25,7 @@ class FreeReels : MainAPI() {
     override var mainUrl = buildMainUrl()
     private val apiUrl = buildH5ApiBaseUrl()
     private val nativeApiUrl = buildNativeApiBaseUrl()
-    override var name = "FreeReels"
+    override var name = "FreeReels😉"
     override var lang = "id"
     override val hasMainPage = true
     override val hasQuickSearch = true
