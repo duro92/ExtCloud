@@ -144,7 +144,8 @@ class FreeReels : MainAPI() {
             ?.takeIf { it.isNotEmpty() }
 
         val nativeItem = findNativeItemBySeriesKey(seriesKey)
-        val detail = getDramaInfo(seriesKey).data?.info
+        val detail = getNativeDramaInfo(seriesKey).data?.info
+            ?: getDramaInfo(seriesKey).data?.info
 
         if (detail != null) {
             val title = localTitle
@@ -153,6 +154,7 @@ class FreeReels : MainAPI() {
 
             val episodes = detail.episodeList.orEmpty()
                 .sortedBy { it.index ?: Int.MAX_VALUE }
+                .filter { it.hasPlayableSource() }
                 .mapIndexed { index, episode ->
                     val episodeNumber = episode.index ?: index + 1
                     val episodeName = episode.name
@@ -194,6 +196,7 @@ class FreeReels : MainAPI() {
         }
 
         val fallbackEpisode = nativeItem?.episodeInfo
+            ?.takeIf { it.hasPlayableSource() }
             ?: throw ErrorLoadingException("Detail FreeReels tidak ditemukan")
         val fallbackTitle = localTitle
             ?: nativeItem?.title?.takeIf { it.isNotBlank() }
@@ -297,10 +300,11 @@ class FreeReels : MainAPI() {
 
         val seriesKey = loadData.seriesKey ?: return false
         val episodeId = loadData.episodeId ?: return false
-        val episode = getDramaInfo(seriesKey).data?.info?.episodeList
-            .orEmpty()
-            .firstOrNull { it.id == episodeId }
-            ?: return false
+        val episode = (
+            getNativeDramaInfo(seriesKey).data?.info?.episodeList
+                ?: getDramaInfo(seriesKey).data?.info?.episodeList
+                ?: emptyList()
+            ).firstOrNull { it.id == episodeId } ?: return false
 
         emit("H264", episode.externalAudioH264M3u8)
         emit("H265", episode.externalAudioH265M3u8)
@@ -433,6 +437,15 @@ class FreeReels : MainAPI() {
         val body = apiGet("/h5-api/drama/info", query)
         return tryParseJson<DramaInfoResponse>(body)
             ?: throw ErrorLoadingException("Respons detail FreeReels tidak valid")
+    }
+
+    private suspend fun getNativeDramaInfo(seriesKey: String): DramaInfoResponse {
+        val query = linkedMapOf(
+            "series_id" to seriesKey,
+        )
+        val body = nativeApiGet("/drama/info_v2", query)
+        return tryParseJson<DramaInfoResponse>(body)
+            ?: throw ErrorLoadingException("Respons detail native FreeReels tidak valid")
     }
 
     private suspend fun getKeywordSuggestions(keyword: String): List<SearchKeyword> {
@@ -839,6 +852,13 @@ class FreeReels : MainAPI() {
             0 -> ShowStatus.Ongoing
             else -> null
         }
+    }
+
+    private fun DramaEpisode.hasPlayableSource(): Boolean {
+        return !externalAudioH264M3u8.isNullOrBlank()
+            || !externalAudioH265M3u8.isNullOrBlank()
+            || !m3u8Url.isNullOrBlank()
+            || !videoUrl.isNullOrBlank()
     }
 
     data class Session(
