@@ -121,15 +121,8 @@ class Melolo : MainAPI() {
         val tags = extractTopTags(doc, titleElement)
         val dramaSlug = extractDramaSlug(normalizedUrl)
             ?: throw ErrorLoadingException("Slug drama Melolo tidak ditemukan")
-
-        val episodes = doc.select("a[href*=$dramaPath$dramaSlug/ep]")
-            .mapNotNull { anchor ->
-                val href = normalizeUrl(anchor.attr("href"))
-                val episodeNumber = extractEpisodeNumber(href) ?: return@mapNotNull null
-                episodeNumber to href
-            }
-            .distinctBy { it.first }
-            .sortedBy { it.first }
+        val totalEpisodeCount = extractVisibleEpisodeCount(doc)
+        val episodes = extractPlayableEpisodes(doc.html(), dramaSlug)
             .map { (episodeNumber, episodeUrl) ->
                 newEpisode(episodeUrl) {
                     name = "Episode $episodeNumber"
@@ -146,7 +139,7 @@ class Melolo : MainAPI() {
             episodes
         ) {
             posterUrl?.let { this.posterUrl = it }
-            plot?.let { this.plot = it }
+            buildPlotWithAvailabilityNote(plot, totalEpisodeCount, episodes.size)?.let { this.plot = it }
             this.tags = tags
             showStatus = ShowStatus.Ongoing
         }
@@ -162,11 +155,14 @@ class Melolo : MainAPI() {
         val episodeNumber = extractEpisodeNumber(episodeUrl)
         val response = app.get(episodeUrl, headers = defaultHeaders)
         val html = response.text
+        if (html.contains("NEXT_HTTP_ERROR_FALLBACK;404", true) || html.contains("Page not found", true)) {
+            return false
+        }
 
         val streams = LinkedHashMap<Int, String>()
         episodeStreamRegex.findAll(html).forEach { match ->
             val number = match.groupValues[1].toIntOrNull() ?: return@forEach
-            val streamUrl = decodeScriptValue(match.groupValues[2]).trim()
+            val streamUrl = cleanStreamUrl(match.groupValues[2])
             if (streamUrl.isNotBlank()) {
                 streams.putIfAbsent(number, streamUrl)
             }
@@ -174,20 +170,26 @@ class Melolo : MainAPI() {
 
         val directUrl = episodeNumber?.let { streams[it] }
             ?: streams.values.firstOrNull()
-            ?: directStreamRegex.find(html)?.value?.let(::decodeScriptValue)
+            ?: directStreamRegex.find(html)?.value?.let(::cleanStreamUrl)
 
         if (directUrl.isNullOrBlank()) return false
+        val linkType = when {
+            directUrl.contains(".m3u8", true) -> ExtractorLinkType.M3U8
+            directUrl.contains(".mpd", true) -> ExtractorLinkType.DASH
+            else -> ExtractorLinkType.VIDEO
+        }
 
         callback.invoke(
             newExtractorLink(
                 source = name,
                     name = "$name ${episodeNumber?.let { "Episode $it" } ?: "Stream"}",
                     url = directUrl,
-                    type = ExtractorLinkType.VIDEO
+                    type = linkType
                 ) {
                     quality = Qualities.Unknown.value
                     referer = episodeUrl
                     headers = mapOf(
+                        "Accept" to "*/*",
                         "Referer" to episodeUrl,
                         "Origin" to siteUrl,
                         "User-Agent" to defaultHeaders.getValue("User-Agent"),
@@ -302,6 +304,62 @@ class Melolo : MainAPI() {
             ?.toIntOrNull()
     }
 
+    private fun extractVisibleEpisodeCount(document: Document): Int? {
+        val html = document.html()
+        return Regex("""Semua Episode \((\d+)\)""", RegexOption.IGNORE_CASE)
+            .find(html)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
+            ?: Regex(""">(\d+)<!-- -->\s*Eps<""", RegexOption.IGNORE_CASE)
+                .find(html)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toIntOrNull()
+            ?: extractEpisodeCount(document.text())
+    }
+
+    private fun extractPlayableEpisodes(html: String, dramaSlug: String): List<Pair<Int, String>> {
+        val numbers = LinkedHashSet<Int>()
+
+        episodeStreamRegex.findAll(html).forEach { match ->
+            val episodeNumber = match.groupValues[1].toIntOrNull() ?: return@forEach
+            val streamUrl = cleanStreamUrl(match.groupValues[2])
+            if (streamUrl.isNotBlank()) {
+                numbers.add(episodeNumber)
+            }
+        }
+
+        Regex("""href="([^"]*/dramas/${Regex.escape(dramaSlug)}/ep(\d+)[^"]*)"""", RegexOption.IGNORE_CASE)
+            .findAll(html)
+            .forEach { match ->
+                val href = normalizeUrl(match.groupValues[1])
+                val episodeNumber = extractEpisodeNumber(href) ?: return@forEach
+                numbers.add(episodeNumber)
+            }
+
+        return numbers
+            .sorted()
+            .map { episodeNumber -> episodeNumber to buildEpisodeUrl(dramaSlug, episodeNumber) }
+    }
+
+    private fun buildEpisodeUrl(dramaSlug: String, episodeNumber: Int): String {
+        return "$mainUrl/dramas/$dramaSlug/ep$episodeNumber"
+    }
+
+    private fun buildPlotWithAvailabilityNote(plot: String?, totalEpisodeCount: Int?, playableEpisodeCount: Int): String? {
+        val normalizedPlot = plot?.trim()?.takeIf { it.isNotBlank() }
+        if (totalEpisodeCount == null || totalEpisodeCount <= playableEpisodeCount) {
+            return normalizedPlot
+        }
+
+        val availabilityNote =
+            "Catatan: Melolo menampilkan $totalEpisodeCount episode, tetapi hanya $playableEpisodeCount episode yang menyediakan stream web publik. Episode lainnya diarahkan ke aplikasi Melolo."
+
+        return listOfNotNull(normalizedPlot, availabilityNote)
+            .joinToString("\n\n")
+    }
+
     private fun scoreDramaCard(query: String, card: DramaCard): Int {
         val normalizedQuery = query.trim().lowercase()
         val title = card.title.lowercase()
@@ -378,6 +436,12 @@ class Melolo : MainAPI() {
             .replace("\\u003f", "?")
             .replace("\\\"", "\"")
             .trim()
+    }
+
+    private fun cleanStreamUrl(value: String): String {
+        return decodeScriptValue(value)
+            .trim()
+            .trimEnd('\\')
     }
 
     private fun encodeQuery(value: String): String {
