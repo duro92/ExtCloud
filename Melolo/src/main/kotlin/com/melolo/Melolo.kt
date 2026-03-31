@@ -29,7 +29,9 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.net.HttpURLConnection
 import java.net.URLEncoder
+import java.net.URL
 import java.security.KeyFactory
 import java.security.PrivateKey
 import java.security.SecureRandom
@@ -75,7 +77,7 @@ class Melolo : MainAPI() {
     private val directStreamRegex = Regex("""https://[^"\\]+?\.mp4[^"\\]*""")
     private val episodeNumberRegex = Regex("""/ep(\d+)(?:[/?#]|$)""", RegexOption.IGNORE_CASE)
     private val shortDramaSnackerRegex = Regex(
-        """https?://short\.inbeidou\.ai/link/dramasnack/serial/[A-Za-z0-9]+/\d+""",
+        """https?://short\.inbeidou\.ai/link/dramasnack/serial/[A-Za-z0-9]+(?:/\d+)?""",
         RegexOption.IGNORE_CASE
     )
     private val dramaSnackerEpisodeRegex = Regex(
@@ -85,6 +87,7 @@ class Melolo : MainAPI() {
     private val dramaSnackerBookIdRegex = Regex("""/episode/(\d+)""", RegexOption.IGNORE_CASE)
     private val dramaSnackerApiUrl = "https://api.dramasnacker.com/drama-snacker/portal/client"
     private val dramaSnackerWebUrl = "https://www.dramasnacker.com"
+    private val defaultDramaSnackerChannelCode = "DSTTBD1050169"
     private val dramaSnackerCryptoKey = "aF4kZ92LmQp8xRcv"
     private val dramaSnackerCryptoIv = "gH7pK2xQz91RtMVa"
     private val dramaSnackerPrivateKeyPem = """
@@ -223,12 +226,15 @@ class Melolo : MainAPI() {
                 channelCode = dramaSnackerEntry.channelCode
             )
             val targetChapter = chapterList
-                .firstOrNull { it.chapterIndex == episodeNumber - 1 }
+                .firstOrNull {
+                    val index = it.chapterIndex ?: return@firstOrNull false
+                    index == episodeNumber - 1 || index == episodeNumber
+                }
                 ?: chapterList
                     .sortedBy { it.chapterIndex ?: Int.MAX_VALUE }
                     .getOrNull((episodeNumber - 1).coerceAtLeast(0))
 
-            val streamUrl = targetChapter?.chapterId
+            val streamUrl = targetChapter?.chapterIdText
                 ?.let { chapterId ->
                     getDramaSnackerChapterVideo(
                         bookId = dramaSnackerEntry.bookId,
@@ -315,11 +321,18 @@ class Melolo : MainAPI() {
     private suspend fun resolveDramaSnackerEntry(html: String, episodeNumber: Int?): DramaSnackerEntry? {
         val decodedHtml = decodeScriptValue(html)
         val directDramaSnacker = dramaSnackerEpisodeRegex.find(decodedHtml)?.value
-        val resolvedUrl = directDramaSnacker ?: shortDramaSnackerRegex.find(decodedHtml)?.value
-            ?.let { shortUrl ->
+        val shortUrls = shortDramaSnackerRegex.findAll(decodedHtml)
+            .map { it.value }
+            .distinct()
+            .toList()
+        val resolvedUrl = directDramaSnacker
+            ?: shortUrls.firstNotNullOfOrNull { shortUrl ->
+                resolveShortRedirect(shortUrl)
+            }
+            ?: shortUrls.firstNotNullOfOrNull { shortUrl ->
                 runCatching {
                     val response = app.get(shortUrl, headers = dramaSnackerMobileHeaders)
-                    response.url
+                    dramaSnackerEpisodeRegex.find(response.text)?.value
                 }.getOrNull()
             }
 
@@ -341,6 +354,45 @@ class Melolo : MainAPI() {
             referer = "$dramaSnackerWebUrl/episode/$bookId",
             episodeNumber = episodeNumber
         )
+    }
+
+    private fun resolveShortRedirect(url: String, maxRedirects: Int = 5): String? {
+        var currentUrl = url
+        repeat(maxRedirects) {
+            val connection = (URL(currentUrl).openConnection() as? HttpURLConnection) ?: return null
+            try {
+                connection.instanceFollowRedirects = false
+                connection.requestMethod = "GET"
+                connection.connectTimeout = 10000
+                connection.readTimeout = 10000
+                dramaSnackerMobileHeaders.forEach { (key, value) ->
+                    connection.setRequestProperty(key, value)
+                }
+                connection.connect()
+
+                val status = connection.responseCode
+                val location = connection.getHeaderField("Location")
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { joinRedirectUrl(currentUrl, it) }
+                if (status in 300..399 && location != null) {
+                    currentUrl = location
+                    if (currentUrl.contains("/episode/", true)) {
+                        return currentUrl
+                    }
+                } else {
+                    return if (currentUrl.contains("/episode/", true)) currentUrl else null
+                }
+            } finally {
+                connection.disconnect()
+            }
+        }
+
+        return currentUrl.takeIf { it.contains("/episode/", true) }
+    }
+
+    private fun joinRedirectUrl(baseUrl: String, location: String): String {
+        return runCatching { URL(URL(baseUrl), location).toString() }
+            .getOrDefault(location)
     }
 
     private suspend fun getDramaSnackerChapterList(
@@ -372,7 +424,7 @@ class Melolo : MainAPI() {
             endpoint = "/content/chapter/load",
             body = body,
             channelCode = channelCode
-        )?.chapterVo?.videoPath
+        )?.chapterVo?.preferredVideoPath
     }
 
     private suspend fun requestDramaSnackerData(
@@ -436,9 +488,7 @@ class Melolo : MainAPI() {
             "localTime" to getCurrentLocalTime(),
             "timeZoneOffset" to getCurrentTimeZoneOffset(),
         )
-        if (!channelCode.isNullOrBlank()) {
-            params["channelCode"] = channelCode
-        }
+        params["channelCode"] = channelCode?.takeIf { it.isNotBlank() } ?: defaultDramaSnackerChannelCode
 
         return encryptDramaSnackerPayload(params.toJson())
     }
@@ -827,15 +877,26 @@ class Melolo : MainAPI() {
     )
 
     data class DramaSnackerChapter(
-        val chapterId: String? = null,
+        val chapterId: Any? = null,
         val chapterIndex: Int? = null,
         val isCharge: Int? = null,
-    )
+    ) {
+        val chapterIdText: String?
+            get() = chapterId?.toString()?.trim()?.takeIf { it.isNotBlank() }
+    }
 
     data class DramaSnackerChapterVo(
-        val chapterId: String? = null,
+        val chapterId: Any? = null,
         val chapterIndex: Int? = null,
         val videoPath: String? = null,
+        val videoUrl: String? = null,
+        val m3u8Url: String? = null,
+        val streamUrl: String? = null,
         val isCharge: Int? = null,
-    )
+    ) {
+        val preferredVideoPath: String?
+            get() = sequenceOf(videoPath, videoUrl, m3u8Url, streamUrl)
+                .mapNotNull { it?.trim() }
+                .firstOrNull { it.isNotBlank() }
+    }
 }
