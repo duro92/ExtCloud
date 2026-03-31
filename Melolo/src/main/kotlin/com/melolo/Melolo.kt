@@ -29,9 +29,7 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
-import java.net.HttpURLConnection
 import java.net.URLEncoder
-import java.net.URL
 import java.security.KeyFactory
 import java.security.PrivateKey
 import java.security.SecureRandom
@@ -219,6 +217,9 @@ class Melolo : MainAPI() {
         if (html.contains("NEXT_HTTP_ERROR_FALLBACK;404", true) || html.contains("Page not found", true)) {
             return false
         }
+        val decodedHtml = decodeScriptValue(html)
+        val hasDramaSnackerReference = shortDramaSnackerRegex.containsMatchIn(decodedHtml) ||
+            dramaSnackerEpisodeRegex.containsMatchIn(decodedHtml)
 
         val dramaSnackerEntry = resolveDramaSnackerEntry(html, episodeNumber)
         if (dramaSnackerEntry != null && episodeNumber != null) {
@@ -242,8 +243,6 @@ class Melolo : MainAPI() {
                                 channelCode = dramaSnackerEntry.channelCode
                             )
                         }
-                        ?.let(::cleanStreamUrl)
-                        ?.takeIf { it.isNotBlank() }
 
                     if (!streamUrl.isNullOrBlank()) {
                         emitExtractorLink(
@@ -260,6 +259,9 @@ class Melolo : MainAPI() {
                     return false
                 }
             }
+        }
+        if (hasDramaSnackerReference && episodeNumber != null) {
+            return false
         }
 
         val streams = LinkedHashMap<Int, String>()
@@ -381,43 +383,19 @@ class Melolo : MainAPI() {
         )
     }
 
-    private fun resolveShortRedirect(url: String, maxRedirects: Int = 5): String? {
-        var currentUrl = url
-        repeat(maxRedirects) {
-            val connection = (URL(currentUrl).openConnection() as? HttpURLConnection) ?: return null
-            try {
-                connection.instanceFollowRedirects = false
-                connection.requestMethod = "GET"
-                connection.connectTimeout = 10000
-                connection.readTimeout = 10000
-                dramaSnackerMobileHeaders.forEach { (key, value) ->
-                    connection.setRequestProperty(key, value)
-                }
-                connection.connect()
+    private suspend fun resolveShortRedirect(url: String): String? {
+        val response = runCatching {
+            app.get(url, headers = dramaSnackerMobileHeaders)
+        }.getOrNull() ?: return null
 
-                val status = connection.responseCode
-                val location = connection.getHeaderField("Location")
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { joinRedirectUrl(currentUrl, it) }
-                if (status in 300..399 && location != null) {
-                    currentUrl = location
-                    if (currentUrl.contains("/episode/", true)) {
-                        return currentUrl
-                    }
-                } else {
-                    return if (currentUrl.contains("/episode/", true)) currentUrl else null
-                }
-            } finally {
-                connection.disconnect()
-            }
-        }
+        val redirectedUrl = cleanStreamUrl(response.url)
+            .takeIf { it.contains("/episode/", true) }
+        if (redirectedUrl != null) return redirectedUrl
 
-        return currentUrl.takeIf { it.contains("/episode/", true) }
-    }
-
-    private fun joinRedirectUrl(baseUrl: String, location: String): String {
-        return runCatching { URL(URL(baseUrl), location).toString() }
-            .getOrDefault(location)
+        return dramaSnackerEpisodeRegex.find(response.text)
+            ?.value
+            ?.let(::cleanStreamUrl)
+            ?.takeIf { it.contains("/episode/", true) }
     }
 
     private suspend fun getDramaSnackerChapterList(
@@ -438,11 +416,37 @@ class Melolo : MainAPI() {
         chapterIndex: Int,
         channelCode: String?
     ): String? {
+        val playSources = listOf("drama_snacker_manual", "drama_snacker")
+        for (playSource in playSources) {
+            val streamUrl = requestDramaSnackerChapterVideo(
+                bookId = bookId,
+                chapterId = chapterId,
+                chapterIndex = chapterIndex,
+                channelCode = channelCode,
+                playSource = playSource
+            )?.let(::cleanStreamUrl)
+                ?.takeIf { it.isNotBlank() }
+                ?: continue
+
+            if (isDramaSnackerVideoUrlValid(streamUrl)) {
+                return streamUrl
+            }
+        }
+        return null
+    }
+
+    private suspend fun requestDramaSnackerChapterVideo(
+        bookId: String,
+        chapterId: String,
+        chapterIndex: Int,
+        channelCode: String?,
+        playSource: String
+    ): String? {
         val body = linkedMapOf<String, Any>(
             "bookId" to bookId,
             "chapterId" to chapterId,
             "chapterIndex" to chapterIndex,
-            "currencyPlaySource" to "drama_snacker_manual"
+            "currencyPlaySource" to playSource
         ).toJson()
 
         return requestDramaSnackerData(
@@ -450,6 +454,18 @@ class Melolo : MainAPI() {
             body = body,
             channelCode = channelCode
         )?.chapterVo?.preferredVideoPath
+    }
+
+    private suspend fun isDramaSnackerVideoUrlValid(streamUrl: String): Boolean {
+        return runCatching {
+            val probeHeaders = mapOf(
+                "Accept" to "*/*",
+                "User-Agent" to dramaSnackerMobileHeaders.getValue("User-Agent"),
+                "Referer" to "$dramaSnackerWebUrl/",
+                "Range" to "bytes=0-1",
+            )
+            app.get(streamUrl, headers = probeHeaders).code in 200..299
+        }.getOrDefault(false)
     }
 
     private suspend fun ensureDramaSnackerSession(channelCode: String?): DramaSnackerSession? {
