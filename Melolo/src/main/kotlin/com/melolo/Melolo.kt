@@ -122,8 +122,14 @@ class Melolo : MainAPI() {
         val dramaSlug = extractDramaSlug(normalizedUrl)
             ?: throw ErrorLoadingException("Slug drama Melolo tidak ditemukan")
         val totalEpisodeCount = extractVisibleEpisodeCount(doc)
-        val episodes = extractPlayableEpisodes(doc.html(), dramaSlug)
-            .map { (episodeNumber, episodeUrl) ->
+        val publicEpisodes = extractPlayableEpisodes(doc.html(), dramaSlug)
+        val lastEpisodeNumber = maxOf(
+            totalEpisodeCount ?: 0,
+            publicEpisodes.maxOfOrNull { it.first } ?: 0
+        )
+        val episodes = (1..lastEpisodeNumber)
+            .map { episodeNumber ->
+                val episodeUrl = buildEpisodeUrl(dramaSlug, episodeNumber)
                 newEpisode(episodeUrl) {
                     name = "Episode $episodeNumber"
                     episode = episodeNumber
@@ -139,7 +145,11 @@ class Melolo : MainAPI() {
             episodes
         ) {
             posterUrl?.let { this.posterUrl = it }
-            buildPlotWithAvailabilityNote(plot, totalEpisodeCount, episodes.size)?.let { this.plot = it }
+            buildPlotWithAvailabilityNote(
+                plot = plot,
+                totalEpisodeCount = totalEpisodeCount,
+                publicEpisodeCount = publicEpisodes.size
+            )?.let { this.plot = it }
             this.tags = tags
             showStatus = ShowStatus.Ongoing
         }
@@ -347,14 +357,18 @@ class Melolo : MainAPI() {
         return "$mainUrl/dramas/$dramaSlug/ep$episodeNumber"
     }
 
-    private fun buildPlotWithAvailabilityNote(plot: String?, totalEpisodeCount: Int?, playableEpisodeCount: Int): String? {
+    private fun buildPlotWithAvailabilityNote(
+        plot: String?,
+        totalEpisodeCount: Int?,
+        publicEpisodeCount: Int
+    ): String? {
         val normalizedPlot = plot?.trim()?.takeIf { it.isNotBlank() }
-        if (totalEpisodeCount == null || totalEpisodeCount <= playableEpisodeCount) {
+        if (totalEpisodeCount == null || totalEpisodeCount <= publicEpisodeCount) {
             return normalizedPlot
         }
 
         val availabilityNote =
-            "Catatan: Melolo menampilkan $totalEpisodeCount episode, tetapi hanya $playableEpisodeCount episode yang menyediakan stream web publik. Episode lainnya diarahkan ke aplikasi Melolo."
+            "Catatan: Melolo menampilkan $totalEpisodeCount episode, tetapi saat ini hanya $publicEpisodeCount episode yang memiliki halaman dan stream web publik. Episode lainnya masih kosong di web atau diarahkan ke aplikasi Melolo."
 
         return listOfNotNull(normalizedPlot, availabilityNote)
             .joinToString("\n\n")

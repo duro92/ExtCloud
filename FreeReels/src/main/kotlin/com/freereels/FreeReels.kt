@@ -66,23 +66,17 @@ class FreeReels : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        if (page > 1) {
-            return newHomePageResponse(
-                HomePageList(request.name, emptyList()),
-                hasNext = false
-            )
-        }
-
         val category = nativeCategories.firstOrNull { it.key == request.data }
             ?: throw ErrorLoadingException("Kategori FreeReels tidak ditemukan")
 
-        val items = getCategoryItems(category)
+        val categoryPage = getCategoryPage(category, page)
+        val items = categoryPage.items
             .mapNotNull { it.toSearchResult() }
             .distinctBy { it.url }
 
         return newHomePageResponse(
             HomePageList(request.name, items),
-            hasNext = false
+            hasNext = categoryPage.hasNext
         )
     }
 
@@ -342,6 +336,36 @@ class FreeReels : MainAPI() {
         }
     }
 
+    private suspend fun getCategoryPage(category: NativeCategory, page: Int): CategoryPage {
+        if (category.isComingSoon) {
+            val items = if (page == 1) getComingSoonItems() else emptyList()
+            return CategoryPage(items, false)
+        }
+
+        val moduleIndex = getNativeModuleIndex(category)
+        if (page <= 1) {
+            return CategoryPage(
+                items = moduleIndex.items.flatMap { it.items.orEmpty() },
+                hasNext = moduleIndex.pageInfo?.hasMore == true
+            )
+        }
+
+        val feedPages = moduleIndex.items
+            .filter { !it.moduleKey.isNullOrBlank() && !it.items.isNullOrEmpty() }
+            .mapNotNull { module ->
+                fetchNativeFeedPage(
+                    moduleKey = module.moduleKey,
+                    page = page,
+                    initialNext = moduleIndex.pageInfo?.next
+                )
+            }
+
+        return CategoryPage(
+            items = feedPages.flatMap { it.items.orEmpty() },
+            hasNext = feedPages.any { it.pageInfo?.hasMore == true }
+        )
+    }
+
     private suspend fun getNativeModuleIndex(category: NativeCategory): ModuleIndexData {
         val query = linkedMapOf(
             "tab_key" to category.tabKey,
@@ -357,6 +381,35 @@ class FreeReels : MainAPI() {
         return tryParseJson<ComingSoonResponse>(body)?.data?.items
             .orEmpty()
             .flatMap { it.items.orEmpty() }
+    }
+
+    private suspend fun getNativeFeedItems(moduleKey: String, next: String?): FeedResponse {
+        val body = nativeApiPost(
+            path = "/homepage/v2/tab/feed",
+            body = FeedRequest(
+                moduleKey = moduleKey,
+                next = next.orEmpty()
+            )
+        )
+        return tryParseJson<FeedResponse>(body)
+            ?: throw ErrorLoadingException("Respons feed native FreeReels tidak valid")
+    }
+
+    private suspend fun fetchNativeFeedPage(
+        moduleKey: String?,
+        page: Int,
+        initialNext: String?
+    ): FeedData? {
+        if (moduleKey.isNullOrBlank() || page <= 1) return null
+
+        var next = initialNext
+        var current: FeedData? = null
+        repeat(page - 1) {
+            if (next.isNullOrBlank()) return current
+            current = getNativeFeedItems(moduleKey, next).data
+            next = current?.pageInfo?.next
+        }
+        return current
     }
 
     private suspend fun getNativeKeywordSuggestions(keyword: String): List<SearchKeyword> {
@@ -1033,6 +1086,11 @@ class FreeReels : MainAPI() {
         val tabKey: String,
         val positionIndex: Int,
         val isComingSoon: Boolean = false,
+    )
+
+    data class CategoryPage(
+        val items: List<HomeItem>,
+        val hasNext: Boolean,
     )
 
 }
