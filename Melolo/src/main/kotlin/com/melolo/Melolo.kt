@@ -103,6 +103,7 @@ class Melolo : MainAPI() {
     private val secureRandom = SecureRandom()
     private val visitorId = buildVisitorId()
     private val dramaSnackerPrivateKey by lazy { parsePrivateKey(dramaSnackerPrivateKeyPem) }
+    private var dramaSnackerSession: DramaSnackerSession? = null
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         if (page > 1) {
@@ -225,37 +226,39 @@ class Melolo : MainAPI() {
                 bookId = dramaSnackerEntry.bookId,
                 channelCode = dramaSnackerEntry.channelCode
             )
-            val targetChapter = chapterList
-                .firstOrNull {
-                    val index = it.chapterIndex ?: return@firstOrNull false
-                    index == episodeNumber - 1 || index == episodeNumber
-                }
-                ?: chapterList
-                    .sortedBy { it.chapterIndex ?: Int.MAX_VALUE }
-                    .getOrNull((episodeNumber - 1).coerceAtLeast(0))
+            if (chapterList.isNotEmpty()) {
+                val targetChapter = findDramaSnackerChapterForEpisode(chapterList, episodeNumber)
+                if (targetChapter != null) {
+                    if ((targetChapter.isCharge ?: 0) == 1) {
+                        return false
+                    }
 
-            val streamUrl = targetChapter?.chapterIdText
-                ?.let { chapterId ->
-                    getDramaSnackerChapterVideo(
-                        bookId = dramaSnackerEntry.bookId,
-                        chapterId = chapterId,
-                        chapterIndex = targetChapter.chapterIndex ?: (episodeNumber - 1),
-                        channelCode = dramaSnackerEntry.channelCode
-                    )
-                }
-                ?.let(::cleanStreamUrl)
-                ?.takeIf { it.isNotBlank() }
+                    val streamUrl = targetChapter.chapterIdText
+                        ?.let { chapterId ->
+                            getDramaSnackerChapterVideo(
+                                bookId = dramaSnackerEntry.bookId,
+                                chapterId = chapterId,
+                                chapterIndex = targetChapter.chapterIndex ?: (episodeNumber - 1),
+                                channelCode = dramaSnackerEntry.channelCode
+                            )
+                        }
+                        ?.let(::cleanStreamUrl)
+                        ?.takeIf { it.isNotBlank() }
 
-            if (!streamUrl.isNullOrBlank()) {
-                emitExtractorLink(
-                    callback = callback,
-                    streamUrl = streamUrl,
-                    episodeNumber = episodeNumber,
-                    referer = "${dramaSnackerEntry.referer}/",
-                    origin = dramaSnackerWebUrl,
-                    userAgent = dramaSnackerMobileHeaders.getValue("User-Agent")
-                )
-                return true
+                    if (!streamUrl.isNullOrBlank()) {
+                        emitExtractorLink(
+                            callback = callback,
+                            streamUrl = streamUrl,
+                            episodeNumber = episodeNumber,
+                            referer = "$dramaSnackerWebUrl/",
+                            origin = "",
+                            userAgent = dramaSnackerMobileHeaders.getValue("User-Agent")
+                        )
+                        return true
+                    }
+
+                    return false
+                }
             }
         }
 
@@ -308,14 +311,36 @@ class Melolo : MainAPI() {
             ) {
                 quality = Qualities.Unknown.value
                 this.referer = referer
-                headers = mapOf(
-                    "Accept" to "*/*",
-                    "Referer" to referer,
-                    "Origin" to origin,
-                    "User-Agent" to userAgent,
-                )
+                headers = buildMap {
+                    put("Accept", "*/*")
+                    if (referer.isNotBlank()) put("Referer", referer)
+                    if (origin.isNotBlank()) put("Origin", origin)
+                    put("User-Agent", userAgent)
+                }
             }
         )
+    }
+
+    private fun findDramaSnackerChapterForEpisode(
+        chapterList: List<DramaSnackerChapter>,
+        episodeNumber: Int
+    ): DramaSnackerChapter? {
+        if (chapterList.isEmpty() || episodeNumber <= 0) return null
+
+        val indexedChapters = chapterList
+            .mapNotNull { chapter ->
+                val index = chapter.chapterIndex ?: return@mapNotNull null
+                chapter to index
+            }
+            .sortedBy { it.second }
+        if (indexedChapters.isEmpty()) return null
+
+        val usesZeroBasedIndex = indexedChapters.any { it.second == 0 }
+        val expectedIndex = if (usesZeroBasedIndex) episodeNumber - 1 else episodeNumber
+
+        return indexedChapters.firstOrNull { it.second == expectedIndex }?.first
+            ?: indexedChapters.getOrNull((episodeNumber - 1).coerceAtLeast(0))?.first
+            ?: indexedChapters.lastOrNull()?.first
     }
 
     private suspend fun resolveDramaSnackerEntry(html: String, episodeNumber: Int?): DramaSnackerEntry? {
@@ -427,12 +452,73 @@ class Melolo : MainAPI() {
         )?.chapterVo?.preferredVideoPath
     }
 
+    private suspend fun ensureDramaSnackerSession(channelCode: String?): DramaSnackerSession? {
+        dramaSnackerSession
+            ?.takeIf { it.userId.isNotBlank() && it.token.isNotBlank() }
+            ?.let { return it }
+
+        val registerEnvelope = requestDramaSnackerEnvelope(
+            endpoint = "/user/register",
+            body = "{}",
+            channelCode = channelCode,
+            session = null
+        ) ?: return null
+        if (registerEnvelope.status != 0) return null
+
+        val registerData = registerEnvelope.data
+            ?.toJson()
+            ?.let { tryParseJson<DramaSnackerRegisterData>(it) }
+            ?: return null
+        val session = DramaSnackerSession(
+            userId = registerData.userIdText ?: "",
+            token = registerData.token?.trim().orEmpty()
+        )
+        if (session.userId.isBlank() || session.token.isBlank()) return null
+
+        dramaSnackerSession = session
+        return session
+    }
+
     private suspend fun requestDramaSnackerData(
         endpoint: String,
         body: String,
         channelCode: String?
     ): DramaSnackerData? {
-        val webParams = buildDramaSnackerWebParams(body, channelCode) ?: return null
+        var session = ensureDramaSnackerSession(channelCode) ?: return null
+        var envelope = requestDramaSnackerEnvelope(
+            endpoint = endpoint,
+            body = body,
+            channelCode = channelCode,
+            session = session
+        ) ?: return null
+        if (envelope.status == 10) {
+            dramaSnackerSession = null
+            session = ensureDramaSnackerSession(channelCode) ?: return null
+            envelope = requestDramaSnackerEnvelope(
+                endpoint = endpoint,
+                body = body,
+                channelCode = channelCode,
+                session = session
+            ) ?: return null
+        }
+        if (envelope.status != 0) return null
+
+        return envelope.data
+            ?.toJson()
+            ?.let { tryParseJson<DramaSnackerData>(it) }
+    }
+
+    private suspend fun requestDramaSnackerEnvelope(
+        endpoint: String,
+        body: String,
+        channelCode: String?,
+        session: DramaSnackerSession?
+    ): DramaSnackerEnvelope? {
+        val webParams = buildDramaSnackerWebParams(
+            body = body,
+            channelCode = channelCode,
+            session = session
+        ) ?: return null
         val response = app.post(
             "$dramaSnackerApiUrl$endpoint",
             requestBody = body.toRequestBody("application/json".toMediaType()),
@@ -445,9 +531,7 @@ class Melolo : MainAPI() {
                 "webParams" to webParams,
             )
         )
-        val envelope = parseDramaSnackerEnvelope(response.text) ?: return null
-        if (envelope.status != 0) return null
-        return envelope.data
+        return parseDramaSnackerEnvelope(response.text)
     }
 
     private fun parseDramaSnackerEnvelope(rawBody: String): DramaSnackerEnvelope? {
@@ -471,9 +555,13 @@ class Melolo : MainAPI() {
         return tryParseJson<DramaSnackerEnvelope>(decryptedBody)
     }
 
-    private fun buildDramaSnackerWebParams(body: String, channelCode: String?): String? {
-        val token = ""
-        val userId = ""
+    private fun buildDramaSnackerWebParams(
+        body: String,
+        channelCode: String?,
+        session: DramaSnackerSession?
+    ): String? {
+        val token = session?.token.orEmpty()
+        val userId = session?.userId.orEmpty()
         val sign = signDramaSnacker("$visitorId$token$body")
         val params = linkedMapOf<String, Any>(
             "plineEnum" to "DRAMASNACKER",
@@ -868,8 +956,22 @@ class Melolo : MainAPI() {
 
     data class DramaSnackerEnvelope(
         val status: Int? = null,
-        val data: DramaSnackerData? = null,
+        val message: String? = null,
+        val data: Any? = null,
     )
+
+    data class DramaSnackerSession(
+        val userId: String,
+        val token: String,
+    )
+
+    data class DramaSnackerRegisterData(
+        val userId: Any? = null,
+        val token: String? = null,
+    ) {
+        val userIdText: String?
+            get() = userId?.toString()?.trim()?.takeIf { it.isNotBlank() }
+    }
 
     data class DramaSnackerData(
         val chapterList: List<DramaSnackerChapter>? = null,
