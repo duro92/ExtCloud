@@ -56,12 +56,11 @@ class Melolo : MainAPI() {
     override val supportedTypes = setOf(TvType.TvSeries, TvType.AsianDrama)
 
     override val mainPage = mainPageOf(
-        "/ranking" to "Peringkat",
-        "/category/romance" to "Romansa",
-        "/category/ceo" to "CEO",
-        "/category/revenge" to "Pembalasan",
-        "/category/rebirth" to "Kelahiran Kembali",
-        "/category/urban" to "Perkotaan",
+        "recommend" to "Populer",
+        "ceo" to "CEO",
+        "romansa" to "Romansa",
+        "keluarga" to "Keluarga",
+        "sistem" to "Sistem",
     )
 
     private val defaultHeaders = mapOf(
@@ -111,9 +110,19 @@ class Melolo : MainAPI() {
             )
         }
 
-        val doc = getDocument(request.data)
-        val items = parseDramaCards(doc)
-            .mapNotNull { it.toSearchResult() }
+        val path = if (request.data.equals("recommend", ignoreCase = true)) {
+            "/ranking"
+        } else {
+            "/category/${encodeQuery(request.data)}"
+        }
+
+        val items = runCatching {
+            val doc = getDocument(path)
+            parseDramaCards(doc).mapNotNull { it.toSearchResult() }
+        }.getOrElse {
+            val fallbackDoc = getDocument("/ranking")
+            parseDramaCards(fallbackDoc).mapNotNull { it.toSearchResult() }
+        }
             .distinctBy { it.url }
 
         return newHomePageResponse(
@@ -144,6 +153,7 @@ class Melolo : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val normalizedUrl = normalizeUrl(url)
         val doc = getDocument(normalizedUrl)
+        val docHtml = doc.html()
         val titleElement = doc.selectFirst("h1")
         val title = titleElement?.text()?.trim().orEmpty().ifBlank {
             doc.selectFirst("meta[property=og:title]")?.attr("content")
@@ -170,8 +180,9 @@ class Melolo : MainAPI() {
         val tags = extractTopTags(doc, titleElement)
         val dramaSlug = extractDramaSlug(normalizedUrl)
             ?: throw ErrorLoadingException("Slug drama Melolo tidak ditemukan")
+        val seriesDramaSnackerEntry = resolveDramaSnackerEntry(docHtml, null)
         val totalEpisodeCount = extractVisibleEpisodeCount(doc)
-        val publicEpisodes = extractPlayableEpisodes(doc.html(), dramaSlug)
+        val publicEpisodes = extractPlayableEpisodes(docHtml, dramaSlug)
         val lastEpisodeNumber = maxOf(
             totalEpisodeCount ?: 0,
             publicEpisodes.maxOfOrNull { it.first } ?: 0
@@ -179,7 +190,14 @@ class Melolo : MainAPI() {
         val episodes = (1..lastEpisodeNumber)
             .map { episodeNumber ->
                 val episodeUrl = buildEpisodeUrl(dramaSlug, episodeNumber)
-                newEpisode(episodeUrl) {
+                newEpisode(
+                    MeloloEpisodeData(
+                        episodeUrl = episodeUrl,
+                        episodeNumber = episodeNumber,
+                        dramaSnackerBookId = seriesDramaSnackerEntry?.bookId,
+                        dramaSnackerChannelCode = seriesDramaSnackerEntry?.channelCode
+                    ).toJson()
+                ) {
                     name = "Episode $episodeNumber"
                     episode = episodeNumber
                 }
@@ -210,9 +228,33 @@ class Melolo : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val episodeUrl = normalizeUrl(data)
-        val episodeNumber = extractEpisodeNumber(episodeUrl)
-        val response = app.get(episodeUrl, headers = defaultHeaders)
+        val episodeData = tryParseJson<MeloloEpisodeData>(data)
+        val episodeUrl = normalizeUrl(episodeData?.episodeUrl?.takeIf { it.isNotBlank() } ?: data)
+        val episodeNumber = episodeData?.episodeNumber ?: extractEpisodeNumber(episodeUrl)
+
+        if (episodeNumber == null) return false
+
+        val cachedDramaSnackerEntry = episodeData?.dramaSnackerBookId
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { bookId ->
+                DramaSnackerEntry(
+                    bookId = bookId,
+                    channelCode = episodeData.dramaSnackerChannelCode,
+                    referer = "$dramaSnackerWebUrl/episode/$bookId",
+                    episodeNumber = episodeNumber
+                )
+            }
+
+        if (cachedDramaSnackerEntry != null) {
+            if (loadDramaSnackerLink(cachedDramaSnackerEntry, episodeNumber, callback)) {
+                return true
+            }
+        }
+
+        val response = runCatching {
+            app.get(episodeUrl, headers = defaultHeaders)
+        }.getOrNull() ?: return false
         val html = response.text
         if (html.contains("NEXT_HTTP_ERROR_FALLBACK;404", true) || html.contains("Page not found", true)) {
             return false
@@ -222,45 +264,14 @@ class Melolo : MainAPI() {
             dramaSnackerEpisodeRegex.containsMatchIn(decodedHtml)
 
         val dramaSnackerEntry = resolveDramaSnackerEntry(html, episodeNumber)
-        if (dramaSnackerEntry != null && episodeNumber != null) {
-            val chapterList = getDramaSnackerChapterList(
-                bookId = dramaSnackerEntry.bookId,
-                channelCode = dramaSnackerEntry.channelCode
-            )
-            if (chapterList.isNotEmpty()) {
-                val targetChapter = findDramaSnackerChapterForEpisode(chapterList, episodeNumber)
-                if (targetChapter != null) {
-                    if ((targetChapter.isCharge ?: 0) == 1) {
-                        return false
-                    }
-
-                    val streamUrl = targetChapter.chapterIdText
-                        ?.let { chapterId ->
-                            getDramaSnackerChapterVideo(
-                                bookId = dramaSnackerEntry.bookId,
-                                chapterId = chapterId,
-                                chapterIndex = targetChapter.chapterIndex ?: (episodeNumber - 1),
-                                channelCode = dramaSnackerEntry.channelCode
-                            )
-                        }
-
-                    if (!streamUrl.isNullOrBlank()) {
-                        emitExtractorLink(
-                            callback = callback,
-                            streamUrl = streamUrl,
-                            episodeNumber = episodeNumber,
-                            referer = "$dramaSnackerWebUrl/",
-                            origin = "",
-                            userAgent = dramaSnackerMobileHeaders.getValue("User-Agent")
-                        )
-                        return true
-                    }
-
-                    return false
-                }
+        if (dramaSnackerEntry != null) {
+            if (loadDramaSnackerLink(dramaSnackerEntry, episodeNumber, callback)) {
+                return true
             }
-        }
-        if (hasDramaSnackerReference && episodeNumber != null) {
+            if (hasDramaSnackerReference) {
+                return false
+            }
+        } else if (hasDramaSnackerReference) {
             return false
         }
 
@@ -273,7 +284,7 @@ class Melolo : MainAPI() {
             }
         }
 
-        val directUrl = episodeNumber?.let { streams[it] }
+        val directUrl = streams[episodeNumber]
             ?: streams.values.firstOrNull()
             ?: directStreamRegex.find(html)?.value?.let(::cleanStreamUrl)
 
@@ -282,11 +293,48 @@ class Melolo : MainAPI() {
             callback = callback,
             streamUrl = directUrl,
             episodeNumber = episodeNumber,
-            referer = episodeUrl,
+            referer = "$siteUrl/",
             origin = siteUrl,
             userAgent = defaultHeaders.getValue("User-Agent")
         )
 
+        return true
+    }
+
+    private suspend fun loadDramaSnackerLink(
+        dramaSnackerEntry: DramaSnackerEntry,
+        episodeNumber: Int,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val chapterList = getDramaSnackerChapterList(
+            bookId = dramaSnackerEntry.bookId,
+            channelCode = dramaSnackerEntry.channelCode
+        )
+        if (chapterList.isEmpty()) return false
+
+        val targetChapter = findDramaSnackerChapterForEpisode(chapterList, episodeNumber)
+            ?: return false
+        if ((targetChapter.isCharge ?: 0) == 1) return false
+
+        val streamUrl = targetChapter.chapterIdText
+            ?.let { chapterId ->
+                getDramaSnackerChapterVideo(
+                    bookId = dramaSnackerEntry.bookId,
+                    chapterId = chapterId,
+                    chapterIndex = targetChapter.chapterIndex ?: (episodeNumber - 1),
+                    channelCode = dramaSnackerEntry.channelCode
+                )
+            }
+            ?: return false
+
+        emitExtractorLink(
+            callback = callback,
+            streamUrl = streamUrl,
+            episodeNumber = episodeNumber,
+            referer = "$dramaSnackerWebUrl/",
+            origin = "",
+            userAgent = dramaSnackerMobileHeaders.getValue("User-Agent")
+        )
         return true
     }
 
@@ -961,6 +1009,13 @@ class Melolo : MainAPI() {
         val plot: String?,
         val tags: List<String>,
         val episodeCount: Int?,
+    )
+
+    data class MeloloEpisodeData(
+        val episodeUrl: String? = null,
+        val episodeNumber: Int? = null,
+        val dramaSnackerBookId: String? = null,
+        val dramaSnackerChannelCode: String? = null,
     )
 
     data class DramaSnackerEntry(
