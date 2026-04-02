@@ -27,14 +27,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URLEncoder
 
-/**
- * Melolo (Indonesia) provider:
- * - Katalog/episode: memakai API publik pihak ketiga (untuk mengambil book_id + vid).
- * - Streaming: memakai endpoint player resmi dari APK (`api.tmtreader.com`) untuk mendapatkan URL video.
- *
- * Kenapa hybrid: endpoint katalog resmi (bookmall/search) butuh common params yang biasanya di-inject
- * oleh network layer aplikasi; tanpa itu respons sering kosong. Link player resmi tetap bisa dipakai.
- */
+
 class Melolo : MainAPI() {
     override var mainUrl = Endpoints.apiBase
     override var name = "Melolo😶"
@@ -56,7 +49,7 @@ class Melolo : MainAPI() {
     private fun seriesUrl(bookId: String) = "$mainUrl/series/$bookId"
 
     private fun bookIdFromUrl(url: String): String {
-        // Supports: https://api.tmtreader.com/series/<book_id>
+   
         return url.substringAfterLast("/").substringBefore("?").trim()
     }
 
