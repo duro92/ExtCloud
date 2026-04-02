@@ -210,23 +210,77 @@ class MovieBoxProvider : MainAPI() {
                 if (page != 1) return newHomePageResponse(emptyList())
 
                 val operatingList = fetchHomeOperatingList() ?: return newHomePageResponse(emptyList())
+
+                suspend fun fetchFilterSection(
+                    title: String,
+                    channelId: String,
+                    country: String = "All",
+                    classify: String = "All",
+                    year: String = "All",
+                    genre: String = "All",
+                    sort: String = "Hottest",
+                    perPage: Int = 20,
+                ): HomePageList? {
+                    val filterType = JSONObject(
+                        mapOf(
+                            "classify" to classify,
+                            "country" to country,
+                            "genre" to genre,
+                            "sort" to sort,
+                            "year" to year,
+                        )
+                    )
+                    val body = JSONObject(
+                        mapOf(
+                            "page" to 1,
+                            "perPage" to perPage,
+                            "tabId" to 0,
+                            "channelId" to channelId,
+                            "filterType" to filterType
+                        )
+                    ).toString()
+
+                    val url = "$apiUrl/wefeed-h5api-bff/subject/filter"
+                    val response = app.post(
+                        url,
+                        headers = apiHeaders(),
+                        requestBody = body.toRequestBody("application/json".toMediaType())
+                    )
+                    val root = mapper.readTree(response.text)
+                    val items = root["data"]?.get("items") ?: return null
+                    if (!items.isArray || items.size() == 0) return null
+                    val results = toSearchResponses(items)
+                    if (results.isEmpty()) return null
+                    return HomePageList(title, results)
+                }
+
+                val lists = mutableListOf<HomePageList>()
+
+                // Keep the website banner (optional) as part of Home.
                 val bannerItems = operatingList.firstOrNull { op ->
                     op["type"]?.asText()?.equals("BANNER", ignoreCase = true) == true
                 }?.get("banner")?.get("items")
+                if (bannerItems != null && bannerItems.isArray && bannerItems.size() > 0) {
+                    val featured = toSearchResponses(bannerItems).take(15)
+                    if (featured.isNotEmpty()) lists.add(HomePageList("Featured", featured))
+                }
 
-                val trendingSubjects = operatingList.firstOrNull { op ->
-                    op["type"]?.asText()?.equals("SUBJECTS_MOVIE", ignoreCase = true) == true &&
-                            op["title"]?.asText()?.equals("Trending", ignoreCase = true) == true
-                }?.get("subjects") ?: operatingList.firstOrNull { op ->
-                    op["type"]?.asText()?.equals("SUBJECTS_MOVIE", ignoreCase = true) == true
-                }?.get("subjects")
+                // "Hardcoded" browsing categories (legacy style), powered by website API (subject/filter).
+                fetchFilterSection("Movies", channelId = "1")?.let(lists::add)
+                fetchFilterSection("Series", channelId = "2")?.let(lists::add)
+                fetchFilterSection("Indonesian (Movies)", channelId = "1", country = "Indonesia")?.let(lists::add)
+                fetchFilterSection("Indonesian (Series)", channelId = "2", country = "Indonesia")?.let(lists::add)
+                fetchFilterSection("Anime", channelId = "1006")?.let(lists::add)
+                fetchFilterSection("Indian (Movies)", channelId = "1", country = "India")?.let(lists::add)
+                fetchFilterSection("Indian (Series)", channelId = "2", country = "India")?.let(lists::add)
+                fetchFilterSection("USA (Movies)", channelId = "1", country = "United States")?.let(lists::add)
+                fetchFilterSection("USA (Series)", channelId = "2", country = "United States")?.let(lists::add)
+                fetchFilterSection("Japan (Movies)", channelId = "1", country = "Japan")?.let(lists::add)
+                fetchFilterSection("Japan (Series)", channelId = "2", country = "Japan")?.let(lists::add)
+                fetchFilterSection("South Korean (Movies)", channelId = "1", country = "Korea")?.let(lists::add)
+                fetchFilterSection("South Korean (Series)", channelId = "2", country = "Korea")?.let(lists::add)
 
-                val combined = buildList {
-                    if (bannerItems != null && bannerItems.isArray) addAll(toSearchResponses(bannerItems).take(12))
-                    if (trendingSubjects != null && trendingSubjects.isArray) addAll(toSearchResponses(trendingSubjects).take(40))
-                }.distinctBy { it.url }
-
-                newHomePageResponse(HomePageList(request.name, combined))
+                if (lists.isEmpty()) newHomePageResponse(emptyList()) else newHomePageResponse(lists)
             }
 
             "trending" -> {
