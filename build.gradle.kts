@@ -6,6 +6,8 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
 buildscript {
     repositories {
         google()
+        // Fallback mirror for Maven Central. Some CI networks get HTTP 403 from `repo.maven.apache.org`.
+        maven("https://maven-central.storage-download.googleapis.com/maven2")
         mavenCentral()
         maven("https://jitpack.io")
     }
@@ -28,6 +30,8 @@ buildscript {
 allprojects {
     repositories {
         google()
+        // Fallback mirror for Maven Central. Some CI networks get HTTP 403 from `repo.maven.apache.org`.
+        maven("https://maven-central.storage-download.googleapis.com/maven2")
         mavenCentral()
         maven("https://jitpack.io")
     }
