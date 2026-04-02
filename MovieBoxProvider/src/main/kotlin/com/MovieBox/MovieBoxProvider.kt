@@ -158,24 +158,24 @@ class MovieBoxProvider : MainAPI() {
 
     override val mainPage = mainPageOf(
         "home" to "Home",
+        "trending" to "Most Trending",
+        "most_watched" to "Most Watched",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         context?.let { StarPopupHelper.showStarPopupIfNeeded(it) }
-        if (request.data != "home" || page != 1) return newHomePageResponse(emptyList())
-
-        val url = "$apiUrl/wefeed-h5api-bff/home?host=$apiHostParam"
-        val response = app.get(url, headers = apiHeaders())
-
         val mapper = jacksonObjectMapper()
-        val root = mapper.readTree(response.text)
-        val data = root["data"] ?: return newHomePageResponse(emptyList())
-        val operatingList = data["operatingList"] ?: return newHomePageResponse(emptyList())
 
         fun toSearchResponses(items: JsonNode): List<SearchResponse> {
             return items.mapNotNull { item ->
-                val subjectId = item["subjectId"]?.asText() ?: item["subject"]?.get("subjectId")?.asText() ?: return@mapNotNull null
-                val detailPath = item["detailPath"]?.asText() ?: item["subject"]?.get("detailPath")?.asText() ?: return@mapNotNull null
+                val subjectId =
+                    item["subjectId"]?.asText()
+                        ?: item["subject"]?.get("subjectId")?.asText()
+                        ?: return@mapNotNull null
+                val detailPath =
+                    item["detailPath"]?.asText()
+                        ?: item["subject"]?.get("detailPath")?.asText()
+                        ?: return@mapNotNull null
                 val title = item["title"]?.asText() ?: item["subject"]?.get("title")?.asText() ?: return@mapNotNull null
 
                 val posterUrl =
@@ -199,23 +199,71 @@ class MovieBoxProvider : MainAPI() {
             }
         }
 
-        val lists = operatingList.mapNotNull { op ->
-            val title = op["title"]?.asText()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-            val subjects = op["subjects"]
-            val bannerItems = op["banner"]?.get("items")
-
-            val items = when {
-                subjects != null && subjects.isArray && subjects.size() > 0 -> subjects
-                bannerItems != null && bannerItems.isArray && bannerItems.size() > 0 -> bannerItems
-                else -> null
-            } ?: return@mapNotNull null
-
-            val results = toSearchResponses(items).take(15)
-            if (results.isEmpty()) return@mapNotNull null
-            HomePageList(title, results)
+        suspend fun fetchHomeOperatingList(): JsonNode? {
+            val url = "$apiUrl/wefeed-h5api-bff/home?host=$apiHostParam"
+            val response = app.get(url, headers = apiHeaders())
+            val root = mapper.readTree(response.text)
+            return root["data"]?.get("operatingList")
         }
 
-        return newHomePageResponse(lists)
+        return when (request.data) {
+            "home" -> {
+                if (page != 1) return newHomePageResponse(emptyList())
+
+                val operatingList = fetchHomeOperatingList() ?: return newHomePageResponse(emptyList())
+                val lists = operatingList.mapNotNull { op ->
+                    val title = op["title"]?.asText()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    val subjects = op["subjects"]
+                    val bannerItems = op["banner"]?.get("items")
+                    val customItems = op["customData"]?.get("items")
+
+                    val items = when {
+                        subjects != null && subjects.isArray && subjects.size() > 0 -> subjects
+                        bannerItems != null && bannerItems.isArray && bannerItems.size() > 0 -> bannerItems
+                        customItems != null && customItems.isArray && customItems.size() > 0 -> customItems
+                        else -> null
+                    } ?: return@mapNotNull null
+
+                    val results = toSearchResponses(items).take(15)
+                    if (results.isEmpty()) return@mapNotNull null
+                    HomePageList(title, results)
+                }
+
+                newHomePageResponse(lists)
+            }
+
+            "trending" -> {
+                val apiPage = (page - 1).coerceAtLeast(0)
+                val url = "$apiUrl/wefeed-h5api-bff/subject/trending?page=$apiPage&perPage=20"
+                val response = app.get(url, headers = apiHeaders())
+                val root = mapper.readTree(response.text)
+                val data = root["data"] ?: return newHomePageResponse(emptyList())
+                val items = data["subjectList"] ?: return newHomePageResponse(emptyList())
+                val pager = data["pager"]
+                val hasNext = pager?.get("hasMore")?.asBoolean() == true
+
+                val results = toSearchResponses(items)
+                newHomePageResponse(HomePageList(request.name, results), hasNext = hasNext)
+            }
+
+            "most_watched" -> {
+                if (page != 1) return newHomePageResponse(emptyList())
+                val operatingList = fetchHomeOperatingList() ?: return newHomePageResponse(emptyList())
+                val mostWatched = operatingList.firstOrNull { op ->
+                    op["title"]?.asText()?.contains("Most", ignoreCase = true) == true &&
+                            op["title"]?.asText()?.contains("Watched", ignoreCase = true) == true
+                } ?: return newHomePageResponse(emptyList())
+
+                val items = mostWatched["customData"]?.get("items")
+                    ?.takeIf { it.isArray && it.size() > 0 }
+                    ?: return newHomePageResponse(emptyList())
+
+                val results = toSearchResponses(items)
+                newHomePageResponse(HomePageList(request.name, results), hasNext = false)
+            }
+
+            else -> newHomePageResponse(emptyList())
+        }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
