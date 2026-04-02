@@ -37,7 +37,7 @@ import java.net.URLEncoder
  */
 class Melolo : MainAPI() {
     override var mainUrl = Endpoints.apiBase
-    override var name = "Melolo"
+    override var name = "Melolo😶"
     override var lang = "id"
     override val hasMainPage = true
     override val hasQuickSearch = true
@@ -368,10 +368,6 @@ class Melolo : MainAPI() {
     }
 
     private object Endpoints {
-        // Obfuscation: keep URLs out of plain text to reduce casual scraping.
-        // Decoded values:
-        // - https://api.tmtreader.com
-        // - https://melolo-api-azure.vercel.app/api/melolo
         private fun d(s: String): String =
             String(Base64.decode(s, Base64.NO_WRAP), Charsets.UTF_8)
 
