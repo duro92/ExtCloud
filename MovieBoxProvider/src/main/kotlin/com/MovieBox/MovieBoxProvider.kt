@@ -52,7 +52,7 @@ class MovieBoxProvider : MainAPI() {
     }
     // User-facing site URL (moviebox.ph). Requests are made to `apiUrl`.
     override var mainUrl = "https://moviebox.ph"
-    override var name = "Moviebox"
+    override var name = "Moviebox🤕"
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
