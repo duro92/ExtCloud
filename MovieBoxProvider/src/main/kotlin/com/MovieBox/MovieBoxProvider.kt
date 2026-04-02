@@ -159,7 +159,6 @@ class MovieBoxProvider : MainAPI() {
     override val mainPage = mainPageOf(
         "home" to "Home",
         "trending" to "Most Trending",
-        "most_watched" to "Most Watched",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -211,25 +210,23 @@ class MovieBoxProvider : MainAPI() {
                 if (page != 1) return newHomePageResponse(emptyList())
 
                 val operatingList = fetchHomeOperatingList() ?: return newHomePageResponse(emptyList())
-                val lists = operatingList.mapNotNull { op ->
-                    val title = op["title"]?.asText()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                    val subjects = op["subjects"]
-                    val bannerItems = op["banner"]?.get("items")
-                    val customItems = op["customData"]?.get("items")
+                val bannerItems = operatingList.firstOrNull { op ->
+                    op["type"]?.asText()?.equals("BANNER", ignoreCase = true) == true
+                }?.get("banner")?.get("items")
 
-                    val items = when {
-                        subjects != null && subjects.isArray && subjects.size() > 0 -> subjects
-                        bannerItems != null && bannerItems.isArray && bannerItems.size() > 0 -> bannerItems
-                        customItems != null && customItems.isArray && customItems.size() > 0 -> customItems
-                        else -> null
-                    } ?: return@mapNotNull null
+                val trendingSubjects = operatingList.firstOrNull { op ->
+                    op["type"]?.asText()?.equals("SUBJECTS_MOVIE", ignoreCase = true) == true &&
+                            op["title"]?.asText()?.equals("Trending", ignoreCase = true) == true
+                }?.get("subjects") ?: operatingList.firstOrNull { op ->
+                    op["type"]?.asText()?.equals("SUBJECTS_MOVIE", ignoreCase = true) == true
+                }?.get("subjects")
 
-                    val results = toSearchResponses(items).take(15)
-                    if (results.isEmpty()) return@mapNotNull null
-                    HomePageList(title, results)
-                }
+                val combined = buildList {
+                    if (bannerItems != null && bannerItems.isArray) addAll(toSearchResponses(bannerItems).take(12))
+                    if (trendingSubjects != null && trendingSubjects.isArray) addAll(toSearchResponses(trendingSubjects).take(40))
+                }.distinctBy { it.url }
 
-                newHomePageResponse(lists)
+                newHomePageResponse(HomePageList(request.name, combined))
             }
 
             "trending" -> {
@@ -244,22 +241,6 @@ class MovieBoxProvider : MainAPI() {
 
                 val results = toSearchResponses(items)
                 newHomePageResponse(HomePageList(request.name, results), hasNext = hasNext)
-            }
-
-            "most_watched" -> {
-                if (page != 1) return newHomePageResponse(emptyList())
-                val operatingList = fetchHomeOperatingList() ?: return newHomePageResponse(emptyList())
-                val mostWatched = operatingList.firstOrNull { op ->
-                    op["title"]?.asText()?.contains("Most", ignoreCase = true) == true &&
-                            op["title"]?.asText()?.contains("Watched", ignoreCase = true) == true
-                } ?: return newHomePageResponse(emptyList())
-
-                val items = mostWatched["customData"]?.get("items")
-                    ?.takeIf { it.isArray && it.size() > 0 }
-                    ?: return newHomePageResponse(emptyList())
-
-                val results = toSearchResponses(items)
-                newHomePageResponse(HomePageList(request.name, results), hasNext = false)
             }
 
             else -> newHomePageResponse(emptyList())
