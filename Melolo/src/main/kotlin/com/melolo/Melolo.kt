@@ -42,6 +42,16 @@ class Melolo : MainAPI() {
     override val mainPage = mainPageOf(
         "latest" to "Terbaru",
         "trending" to "Trending",
+        // Search-backed categories (paginated via limit/offset)
+        "q:ceo" to "CEO",
+        "q:romansa" to "Romansa",
+        "q:sistem" to "Sistem",
+        "q:keluarga" to "Keluarga",
+        "q:mafia" to "Mafia",
+        "q:aksi" to "Aksi",
+        "q:balas dendam" to "Balas Dendam",
+        "q:pernikahan" to "Pernikahan",
+        "q:drama periode" to "Drama Periode",
     )
 
     private fun String.urlEncode(): String = URLEncoder.encode(this, "UTF-8")
@@ -184,14 +194,26 @@ class Melolo : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        if (page > 1) return newHomePageResponse(
+        // latest/trending are not paginated by the catalog API; keep them as page=1 only.
+        // search-backed categories are paginated (page -> offset).
+        val isSearchCategory = request.data.startsWith("q:", ignoreCase = true)
+        if (page > 1 && !isSearchCategory) return newHomePageResponse(
             HomePageList(request.name, emptyList()),
             hasNext = false
         )
 
-        val books = when (request.data) {
-            "trending" -> fetchTrending()
-            else -> fetchLatest()
+        val (books, hasNext) = if (isSearchCategory) {
+            val query = request.data.removePrefix("q:").trim()
+            val limit = 20
+            val offset = (page.coerceAtLeast(1) - 1) * limit
+            val (b, more) = fetchSearchPage(query, limit = limit, offset = offset)
+            b to more
+        } else {
+            val b = when (request.data) {
+                "trending" -> fetchTrending()
+                else -> fetchLatest()
+            }
+            b to false
         }
 
         val items = books.mapNotNull { b ->
@@ -206,7 +228,7 @@ class Melolo : MainAPI() {
             }
         }
 
-        return newHomePageResponse(HomePageList(request.name, items), hasNext = false)
+        return newHomePageResponse(HomePageList(request.name, items), hasNext = hasNext)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
