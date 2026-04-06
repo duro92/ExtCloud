@@ -4,6 +4,10 @@ CloudStream Indonesian Extensions Repository
 
 ---
 
+## 💬 Grup Telegram Gabung untuk diskusi dan update repo: 
+👉 [https://t.me/extcloudid](https://t.me/extcloudid)
+
+---
 ## 📥 Install ExtCloud
 
 Klik tombol di bawah untuk langsung install di CloudStream (Android):
