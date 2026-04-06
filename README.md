@@ -19,16 +19,6 @@ Silakan cek update dan link terbaru melalui grup Telegram.
 
 ---
 
-## ☕ Buat Ngopi
-
-Jika ingin support pengembangan:
-
-<a href="https://saweria.co/duro92" target="_blank">
-  <img src="https://img.shields.io/badge/Donate-Saweria-orange?style=for-the-badge&logo=ko-fi" />
-</a>
-
----
-
 ## 🙏 Thanks To
 
 1. [Tekuma25](https://github.com/TeKuma25/IndoStream)
